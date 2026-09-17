@@ -53,12 +53,18 @@ UNITS = [
     ("PSI", "Libras por pulgada cuadrada", {"es": "Libras por pulgada cuadrada", "en": "Pounds per square inch"}),
     ("Hz", "Hercios", {"es": "Hercios", "en": "Hertz"}),
     ("rpm", "Revoluciones por minuto", {"es": "Revoluciones por minuto", "en": "Revolutions per minute"}),
+    ("cSt", "Centistokes", {"es": "Centistokes", "en": "Centistokes"}),
+    ("ppm", "Partes por millón", {"es": "Partes por millón", "en": "Parts per million"}),
+    ("kV", "Kilovoltios", {"es": "Kilovoltios", "en": "Kilovolts"}),
+    ("mgKOH/g", "Número ácido", {"es": "Miligramos de KOH por gramo", "en": "Milligrams KOH per gram"}),
 ]
 
 TECHNIQUES = [
     ("vibration", "Análisis de vibraciones", "Vibration analysis", "vibration"),
     ("ultrasound", "Análisis de ultrasonido", "Ultrasound analysis", "ultrasound"),
     ("thermography", "Termografía", "Thermography", "thermography"),
+    ("oil_analysis", "Análisis de aceite", "Oil analysis", "oil_analysis"),
+    ("insulating_oil", "Aceite dieléctrico", "Insulating oil", "oil_analysis"),
     ("maintenance", "Mantenimiento", "Maintenance", "operating_data"),
     ("lubrication", "Lubricación", "Lubrication", "operating_data"),
     ("alignment", "Alineamiento", "Alignment", "operating_data"),
@@ -68,7 +74,11 @@ MAGNITUDES = [
     ("vel_rms", "vibration", "Velocidad vibracional", "Vibration velocity", "mm/s", "rms", 2),
     ("env_accel", "vibration", "Envolvente de aceleración", "Acceleration envelope", "gE", "peak", 2),
     ("temp", "thermography", "Temperatura", "Temperature", "°C", "max", 0),
+    ("delta_temp", "thermography", "Diferencia de temperatura", "Temperature difference", "°C", "max", 1),
     ("us_db", "ultrasound", "Nivel de ultrasonido", "Ultrasound level", "dB", "avg", 1),
+    ("viscosity_40", "oil_analysis", "Viscosidad a 40 °C", "Viscosity at 40 °C", "cSt", "avg", 1),
+    ("water_ppm", "oil_analysis", "Contenido de agua", "Water content", "ppm", "avg", 0),
+    ("dielectric_kv", "insulating_oil", "Rigidez dieléctrica", "Dielectric strength", "kV", "avg", 1),
 ]
 
 # Limits transcribed from the reports, with their source.
@@ -83,6 +93,12 @@ THRESHOLDS = [
     ("env_accel", "peak", "gE", "global", None, None, None, "2.5", "4.0", "Envolvente en Gs pico"),
     ("env_accel", "peak_to_peak", "gE", "global", None, None, None, "9.0", "15.0", "Envolvente en Gs pico-pico"),
     ("temp", "max", "°C", "global", None, None, None, "60", "80", "Criterio térmico general"),
+    ("delta_temp", "max", "°C", "global", None, "neta_mts", None, "10", "30",
+     "ΔT sobre equipo similar en igual carga, según NETA MTS"),
+    ("us_db", "avg", "dB", "global", None, "iso_29821", None, "10", "20",
+     "Incremento sobre la línea base del punto"),
+    ("water_ppm", "avg", "ppm", "global", None, "iso_14830_1", None, "200", "500",
+     "Contenido de agua en lubricante"),
 ]
 
 ROLES = {
@@ -148,8 +164,8 @@ class Command(BaseCommand):
         company = self._company()
         self._modules()
         statuses = self._statuses(company)
-        standards = self._standards(company)
         units, techniques, magnitudes = self._catalogue()
+        standards = self._standards(company, techniques)
         self._profiles(company, statuses, techniques)
         self._thresholds(company, statuses, standards, units)
         users = self._users(company)
@@ -209,13 +225,17 @@ class Command(BaseCommand):
             )
         return created
 
-    def _standards(self, company: Company) -> dict[str, ThresholdStandard]:
+    def _standards(self, company: Company, techniques) -> dict[str, ThresholdStandard]:
         created = {}
         for standard in STANDARDS:
             row = ThresholdStandard.objects.create(
                 company=company, code=standard.code, name=standard.name,
                 source=standard.source, is_builtin=True,
             )
+            # A standard judges the service type it was written for.
+            row.techniques.set([
+                techniques[code] for code in standard.techniques if code in techniques
+            ])
             for order, machine_class in enumerate(standard.machine_classes):
                 MachineClass.objects.create(
                     standard=row, code=machine_class.code, name=machine_class.name,
