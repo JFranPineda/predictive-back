@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -22,6 +23,7 @@ DJANGO_APPS = [
 ]
 THIRD_PARTY_APPS = [
     "rest_framework",
+    "rest_framework_simplejwt.token_blacklist",
     "django_filters",
     "corsheaders",
     "drf_spectacular",
@@ -108,6 +110,22 @@ REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
 
+# Thirty minutes of inactivity, not thirty minutes of session.
+#
+# simplejwt defaults to a five-minute access token, which is what was logging
+# people out mid-form. Rotating the refresh on every use restarts the window,
+# so a user who keeps working never notices it, and one who walks away is out
+# in half an hour. The old refresh is blacklisted on rotation: a token that
+# leaked cannot be replayed after the session moved on.
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=int(os.environ.get("ACCESS_MINUTES", "30"))),
+    "REFRESH_TOKEN_LIFETIME": timedelta(minutes=int(os.environ.get("IDLE_MINUTES", "30"))),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+    "UPDATE_LAST_LOGIN": True,
+    "AUTH_HEADER_TYPES": ("Bearer",),
+}
+
 SPECTACULAR_SETTINGS = {
     "TITLE": "Predictive API",
     "VERSION": "1.0.0",
@@ -118,6 +136,12 @@ CELERY_BROKER_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 CELERY_TASK_ROUTES = {"media.*": {"queue": "media"}}
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+
+# `local` keeps files on disk, which is what a single-server install and
+# every developer machine actually has; `s3` signs URLs against object storage.
+MEDIA_BACKEND = os.environ.get("MEDIA_BACKEND", "local")
+MEDIA_ROOT = BASE_DIR / os.environ.get("MEDIA_ROOT", "data/media")
+MEDIA_URL = "/media/"
 
 OBJECT_STORE_ENDPOINT = os.environ.get("OBJECT_STORE_ENDPOINT", "http://localhost:9000")
 OBJECT_STORE_BUCKET = os.environ.get("OBJECT_STORE_BUCKET", "predictive")
