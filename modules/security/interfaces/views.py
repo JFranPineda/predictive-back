@@ -43,6 +43,76 @@ class UserListView(APIView):
         ])
 
 
+class UserCreateView(APIView):
+    """Invites somebody into this company.
+
+    The password is set once here and the person changes it; we do not email
+    credentials, because a password in an inbox is a password in the clear
+    forever.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from rest_framework.exceptions import PermissionDenied
+
+        from modules.security.application.access import build_actor
+        from modules.security.domain.actor import Role
+        from modules.security.infrastructure.models import Role as RoleModel, User
+
+        actor = build_actor(request.user, request.company_id)
+        if not actor.has("security.manage_user"):
+            raise PermissionDenied("No puedes administrar usuarios")
+
+        email = (request.data.get("email") or "").strip().lower()
+        role_code = request.data.get("role")
+        password = request.data.get("password") or ""
+        if not email or "@" not in email:
+            return Response({"type": "invalid_email", "title": "Correo no válido", "status": 400},
+                            status=400)
+        if role_code not in {role.value for role in Role}:
+            return Response({"type": "unknown_role", "title": "Rol desconocido", "status": 400},
+                            status=400)
+        if len(password) < 10:
+            return Response(
+                {"type": "weak_password", "title": "La contraseña necesita 10 caracteres o más",
+                 "status": 400},
+                status=400,
+            )
+
+        role = RoleModel.objects.filter(company_id=request.company_id, code=role_code).first()
+        if role is None:
+            return Response({"type": "unknown_role", "title": "Rol desconocido", "status": 400},
+                            status=400)
+
+        is_external = role_code == Role.EXTERNAL_INSPECTOR.value
+        user = User.objects.filter(email=email).first()
+        if user is None:
+            user = User.objects.create_user(
+                email=email,
+                password=password,
+                first_name=(request.data.get("first_name") or "").strip(),
+                last_name=(request.data.get("last_name") or "").strip(),
+                initials=(request.data.get("initials") or "").strip()[:6],
+                is_external=is_external,
+            )
+        elif Membership.objects.filter(user=user, company_id=request.company_id).exists():
+            return Response(
+                {"type": "already_member", "title": "Esa persona ya pertenece a la compañía",
+                 "status": 409},
+                status=409,
+            )
+
+        Membership.objects.create(user=user, company_id=request.company_id, role=role,
+                                  is_default=True)
+        return Response({
+            "id": user.id, "email": user.email, "full_name": user.get_full_name(),
+            "initials": user.initials, "role": role.code, "role_name": role.name,
+            "is_external": user.is_external, "is_active": user.is_active,
+            "language": user.language or "", "area_restrictions": [],
+        }, status=201)
+
+
 class UserDetailView(APIView):
     """Role and activation. Everything else about a person — their name, their
     password — is theirs to change, not an administrator's."""

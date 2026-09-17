@@ -48,6 +48,22 @@ class UnitListView(APIView):
             for row in Unit.objects.order_by("code")
         ])
 
+    def post(self, request):
+        actor = build_actor(request.user, request.company_id)
+        if not actor.has("thresholds.manage_set"):
+            raise PermissionDenied("Falta el permiso thresholds.manage_set")
+
+        code = (request.data.get("code") or "").strip()
+        name = (request.data.get("name") or "").strip()
+        if not code or not name:
+            raise ValidationError("El símbolo y el nombre son obligatorios")
+        if Unit.objects.filter(code=code).exists():
+            raise ValidationError(f"Ya existe la unidad '{code}'")
+        unit = Unit.objects.create(
+            code=code, name=name, translations={"name": _names(request.data, name)}
+        )
+        return Response({"code": unit.code, "name": unit.name}, status=201)
+
 
 class MagnitudeListView(APIView):
     """What gets measured. Creating one is configuration, not a release."""

@@ -17,6 +17,8 @@ MANIFEST = Manifest(
         ("thresholds.recalculate", "Recalcular estados históricos"),
     ),
     menu=(
+        MenuItem(label="Medidas", route="/settings/magnitudes", icon="ruler",
+                 order=16, parent="settings", permission="thresholds.view_set"),
         MenuItem(label="Normas", route="/settings/standards", icon="book",
                  order=18, parent="settings", permission="thresholds.manage_standard"),
         MenuItem(label="Umbrales", route="/settings/thresholds", icon="gauge",
