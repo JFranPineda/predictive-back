@@ -35,6 +35,7 @@ from modules.assets.models import (
 )
 from modules.core.models import Company, InstalledModule
 from modules.diagnostics.models import EquipmentLogEntry, FaultMode
+from modules.operating_data.models import OperatingParameter
 from modules.measurements.models import Instrument, Magnitude, Reading, Technique, Unit
 from modules.security.models import Membership, Permission, Role, User
 from modules.services.models import ServiceOrder, ServicePlan, ServiceVisit, VisitParticipant
@@ -178,6 +179,7 @@ class Command(BaseCommand):
         standards = self._standards(company, techniques)
         self._profiles(company, statuses, techniques)
         self._thresholds(company, statuses, standards, units)
+        self._operating_parameters(company)
         users = self._users(company)
         instruments = self._instruments(company)
 
@@ -353,6 +355,18 @@ class Command(BaseCommand):
             users[initials] = user
         users["ADMIN"] = users["AD"]
         return users
+
+    def _operating_parameters(self, company) -> None:
+        """The columns that sit beside the vibration values in the real
+        reports: frequency, suction and discharge pressure, running hours."""
+        for order, (code, name_es, name_en, unit, technique, applies, cumulative) in enumerate(
+            OPERATING_PARAMETERS
+        ):
+            OperatingParameter.objects.create(
+                company=company, code=code, name=name_es, unit_code=unit,
+                technique_code=technique, applies_to=applies, is_cumulative=cumulative,
+                order=order, translations={"name": {"es": name_es, "en": name_en}},
+            )
 
     def _instruments(self, company) -> dict[str, Instrument]:
         rows = [
@@ -676,6 +690,27 @@ class Command(BaseCommand):
             if matched:
                 entry.fault_modes.set(matched)
 
+
+OPERATING_PARAMETERS = [
+    # code, es, en, unit, technique ("" = any), applies_to, cumulative
+    ("rpm", "Velocidad", "Speed", "rpm", "", [], False),
+    ("freq_hz", "Frecuencia", "Frequency", "Hz", "", [], False),
+    ("current_a", "Amperaje", "Current", "A", "", ["motor"], False),
+    ("voltage_v", "Voltaje", "Voltage", "V", "", ["motor"], False),
+    ("power_kw", "Potencia", "Power", "kW", "", ["motor"], False),
+    ("power_factor", "Factor de potencia", "Power factor", "", "", ["motor"], False),
+    ("running_hours", "Horas acumuladas", "Running hours", "h", "", [], True),
+    ("suction_psi", "Presión de succión", "Suction pressure", "PSI", "", ["pump"], False),
+    ("discharge_psi", "Presión de descarga", "Discharge pressure", "PSI", "", ["pump"], False),
+    ("flushing_coupling_psi", "Presión flushing lado acople", "Flushing pressure, coupling end",
+     "PSI", "", ["pump"], False),
+    ("flushing_free_psi", "Presión flushing lado libre", "Flushing pressure, free end",
+     "PSI", "", ["pump"], False),
+    ("ambient_temp", "Temperatura ambiente", "Ambient temperature", "°C", "thermography", [], False),
+    ("emissivity", "Emisividad", "Emissivity", "", "thermography", [], False),
+    ("load_pct", "Carga", "Load", "%", "thermography", [], False),
+    ("oil_hours", "Horas del lubricante", "Oil hours", "h", "oil_analysis", [], True),
+]
 
 GROUP_KINDS = [
     ("motor_pump", "Motor-Bomba", [("MOTOR", "motor", "driver"), ("BOMBA", "pump", "driven")]),
