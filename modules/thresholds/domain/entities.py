@@ -104,14 +104,31 @@ class MachineClass:
 
 @dataclass(frozen=True, slots=True)
 class Standard:
+    """A standard belongs to the technique it was written for.
+
+    ISO 10816-3 judges vibration velocity; NETA MTS judges thermographic ΔT;
+    ISO 14830 judges lubricant condition. Leaving that unsaid let a
+    thermography standard be attached to a vibration limit — nothing in the
+    system objected, and the mistake only showed up in a report.
+
+    An empty tuple means "any technique", which is what a company's own
+    in-house criterion usually is.
+    """
+
     code: str
     name: str
     source: str = ""
     machine_classes: tuple[MachineClass, ...] = ()
+    techniques: tuple[str, ...] = ()
     is_builtin: bool = False
 
     def has_class(self, code: str | None) -> bool:
         return code is None or any(c.code == code for c in self.machine_classes)
+
+    def covers_technique(self, technique_code: str | None) -> bool:
+        if not self.techniques:
+            return True
+        return technique_code is not None and technique_code in self.techniques
 
 
 @dataclass(frozen=True, slots=True)

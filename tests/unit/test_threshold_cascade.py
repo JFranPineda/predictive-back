@@ -17,6 +17,7 @@ from modules.thresholds.domain.defaults import (
     OPERATIONAL,
     RETIRED,
     SHUTDOWN,
+    STANDARDS,
     profile_for,
     standard_for,
 )
@@ -25,16 +26,23 @@ from modules.thresholds.domain.entities import (
     Band,
     EvaluationContext,
     Scope,
+    Standard,
     StatusKind,
     ThresholdSet,
 )
-from modules.thresholds.domain.errors import OverlappingBands, StatusNotInProfile
+from modules.thresholds.domain.errors import (
+    OverlappingBands,
+    StandardTechniqueMismatch,
+    StatusNotInProfile,
+)
 from modules.thresholds.domain.services import (
     declare_availability,
     evaluate,
     resolve,
+    standards_for_technique,
     validate_against_profile,
     validate_bands,
+    validate_standard_for_magnitude,
 )
 
 
@@ -225,3 +233,49 @@ class TestBandValidation:
 
     def test_contiguous_bands_pass(self):
         validate_bands(ISO)
+
+
+class TestStandardBelongsToATechnique:
+    """A standard judges the technique it was written for.
+
+    Nothing used to say so, so a thermography criterion could be attached to a
+    vibration limit and the system stayed quiet about it.
+    """
+
+    def test_a_vibration_standard_covers_vibration(self):
+        assert standard_for("iso_10816_3").covers_technique("vibration")
+
+    def test_and_nothing_else(self):
+        iso = standard_for("iso_10816_3")
+        assert not iso.covers_technique("thermography")
+        assert not iso.covers_technique("oil_analysis")
+
+    def test_each_technique_ships_with_its_own_standards(self):
+        pairs = {
+            "thermography": {"neta_mts", "iso_18434_1"},
+            "ultrasound": {"iso_29821"},
+            "oil_analysis": {"iso_4406", "iso_14830_1"},
+            "insulating_oil": {"iec_60422"},
+        }
+        for technique, expected in pairs.items():
+            offered = {s.code for s in standards_for_technique(STANDARDS, technique)}
+            assert expected <= offered, f"{technique} is missing {expected - offered}"
+
+    def test_a_standard_with_no_technique_is_a_house_criterion(self):
+        house = Standard(code="propia", name="Criterio interno")
+        assert house.covers_technique("vibration")
+        assert house.covers_technique("ultrasound")
+
+    def test_a_thermography_standard_cannot_judge_a_vibration_magnitude(self):
+        with pytest.raises(StandardTechniqueMismatch) as exc:
+            validate_standard_for_magnitude(standard_for("neta_mts"), "vel_rms", "vibration")
+        assert exc.value.standard_code == "neta_mts"
+
+    def test_the_right_pairing_passes(self):
+        validate_standard_for_magnitude(standard_for("neta_mts"), "delta_temp", "thermography")
+        validate_standard_for_magnitude(standard_for("iso_10816_3"), "vel_rms", "vibration")
+
+    def test_the_picker_only_offers_what_can_judge_the_magnitude(self):
+        offered = {s.code for s in standards_for_technique(STANDARDS, "ultrasound")}
+        assert "iso_10816_3" not in offered
+        assert "iso_29821" in offered

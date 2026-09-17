@@ -66,6 +66,12 @@ class ThresholdStandard(TenantModel, TranslatableModel):
     name = models.CharField(max_length=160)
     source = models.CharField(max_length=240, blank=True)
     description = models.TextField(blank=True)
+    # The service types this standard was written for. ISO 10816-3 judges
+    # vibration, NETA MTS judges thermography, ISO 14830 judges oil. Empty
+    # means a house criterion that applies to anything.
+    techniques = models.ManyToManyField(
+        "measurements.Technique", blank=True, related_name="standards"
+    )
     is_builtin = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
 

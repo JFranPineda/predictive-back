@@ -8,12 +8,13 @@ from .entities import (
     Evaluation,
     EvaluationContext,
     Scope,
+    Standard,
     Status,
     StatusKind,
     TechniqueStatusProfile,
     ThresholdSet,
 )
-from .errors import OverlappingBands, StatusNotInProfile
+from .errors import OverlappingBands, StandardTechniqueMismatch, StatusNotInProfile
 
 
 def resolve(
@@ -72,6 +73,26 @@ def validate_bands(threshold_set: ThresholdSet) -> None:
             current.min_value is not None and current.min_value < previous.max_value
         ):
             raise OverlappingBands(previous.status.code, current.status.code)
+
+
+def validate_standard_for_magnitude(
+    standard: Standard, magnitude_code: str, magnitude_technique: str | None
+) -> None:
+    """A band set may only cite a standard written for its own technique.
+
+    This is the check that stops NETA MTS — a thermography criterion — from
+    being attached to a vibration velocity limit.
+    """
+    if not standard.covers_technique(magnitude_technique):
+        raise StandardTechniqueMismatch(standard.code, magnitude_code, magnitude_technique)
+
+
+def standards_for_technique(
+    standards: Iterable[Standard], technique_code: str
+) -> tuple[Standard, ...]:
+    """What the UI offers when the user picks a magnitude: only the standards
+    that can legitimately judge it."""
+    return tuple(s for s in standards if s.covers_technique(technique_code))
 
 
 def validate_against_profile(
