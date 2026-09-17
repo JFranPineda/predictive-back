@@ -1,0 +1,57 @@
+name: predictive
+
+services:
+  db:
+    image: timescale/timescaledb:2.17.2-pg16
+    environment:
+      POSTGRES_DB: predictive
+      POSTGRES_USER: predictive
+      POSTGRES_PASSWORD: predictive
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U predictive"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+  # Object storage for originals and derivatives. Django signs URLs; the
+  # browser uploads and downloads straight from here.
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports: ["9000:9000", "9001:9001"]
+    volumes: ["miniodata:/data"]
+
+  api:
+    build: .
+    command: python manage.py runserver 0.0.0.0:8000
+    env_file: [.env]
+    ports: ["8000:8000"]
+    volumes: [".:/app"]
+    depends_on:
+      db: {condition: service_healthy}
+
+  worker:
+    build: .
+    command: celery -A config worker -Q celery,media -l info
+    env_file: [.env]
+    volumes: [".:/app"]
+    depends_on: [redis, db]
+
+  beat:
+    build: .
+    command: celery -A config beat -l info
+    env_file: [.env]
+    volumes: [".:/app"]
+    depends_on: [redis, db]
+
+volumes:
+  pgdata:
+  miniodata:
