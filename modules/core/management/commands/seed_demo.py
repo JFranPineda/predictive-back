@@ -35,7 +35,7 @@ from modules.assets.models import (
 )
 from modules.core.models import Company, InstalledModule
 from modules.diagnostics.models import EquipmentLogEntry, FaultMode
-from modules.operating_data.models import OperatingParameter
+from modules.operating_data.models import OperatingParameter, OperatingReading
 from modules.measurements.models import Instrument, Magnitude, Reading, Technique, Unit
 from modules.security.models import Membership, Permission, Role, User
 from modules.services.models import ServiceOrder, ServicePlan, ServiceVisit, VisitParticipant
@@ -612,7 +612,32 @@ class Command(BaseCommand):
                             instrument=visit.instrument, quality="ok",
                         ))
         Reading.objects.bulk_create(readings, batch_size=2000)
+        self._operating_values(company, equipment, visits_by_equipment)
         self._settle_status(equipment, statuses)
+
+    def _operating_values(self, company, equipment, visits_by_equipment) -> None:
+        """The conditions the machine was running under, round by round.
+
+        Running hours only grow, and the rest drift a little: a plant that
+        reports exactly 60.0 Hz every month is a plant nobody is measuring.
+        """
+        parameters = {p.code: p for p in OperatingParameter.objects.filter(company=company)}
+        rows = []
+        for item in equipment:
+            visits = visits_by_equipment.get(item.id, [])
+            hours = random.randint(12_000, 40_000)
+            for visit in visits:
+                hours += random.randint(400, 760)
+                for code, value in _operating_for(item, hours).items():
+                    parameter = parameters.get(code)
+                    if parameter is None:
+                        continue
+                    rows.append(OperatingReading(
+                        company=company, service_visit=visit, equipment=item,
+                        parameter=parameter, value=Decimal(str(value)),
+                        taken_at=visit.visited_at,
+                    ))
+        OperatingReading.objects.bulk_create(rows, batch_size=2000)
 
     def _settle_status(self, equipment, statuses) -> None:
         """The traffic light must agree with the trend.
@@ -748,6 +773,29 @@ FAULT_KEYWORDS = {
     "lubrication": ("lubrica",),
     "belt_wear": ("faja", "polea"),
 }
+
+
+def _operating_for(item, hours: int) -> dict[str, float]:
+    values = {
+        "rpm": round(random.uniform(1590, 1660)),
+        "freq_hz": round(random.uniform(53, 60), 1),
+        "running_hours": hours,
+    }
+    if item.equipment_type == "motor":
+        values |= {
+            "current_a": round(random.uniform(120, 140)),
+            "voltage_v": 3794,
+            "power_kw": 822,
+            "power_factor": 0.9,
+        }
+    if item.equipment_type == "pump":
+        values |= {
+            "suction_psi": round(random.uniform(3, 19), 1),
+            "discharge_psi": round(random.uniform(168, 190)),
+            "flushing_coupling_psi": round(random.uniform(13, 30)),
+            "flushing_free_psi": round(random.uniform(14, 25)),
+        }
+    return values
 
 
 def _severity(condition_code: str | None) -> int:

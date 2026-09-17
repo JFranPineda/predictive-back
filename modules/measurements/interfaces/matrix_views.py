@@ -86,6 +86,18 @@ class EquipmentMatrixView(APIView):
                 columns[column_key] = _column(reading, actor, equipment)
             else:
                 column["can_edit"] = column["can_edit"] or _editable(reading, actor, equipment)
+            # One round covers the whole train, so a column spans the visit of
+            # each machine in it. Keeping only the first lost the operating
+            # conditions of the other one.
+            if reading.service_visit_id:
+                entry = columns[column_key]
+                if reading.service_visit_id not in entry["visit_ids"]:
+                    entry["visit_ids"].append(reading.service_visit_id)
+                # Which of them is the machine that was asked for. A running
+                # hour counter belongs to one machine, so merging the train's
+                # visits blindly made it jump between two counters.
+                if reading.point.equipment_id == equipment.id:
+                    entry["primary_visit_id"] = reading.service_visit_id
 
             magnitude = reading.magnitude
             block = blocks.setdefault(
@@ -195,6 +207,8 @@ def _column(reading: Reading, actor, equipment: Equipment) -> dict:
     visit = reading.service_visit
     return {
         "key": _column_key(reading),
+        "visit_ids": [],
+        "primary_visit_id": None,
         "taken_at": reading.taken_at.isoformat(),
         "date": reading.taken_at.date().isoformat(),
         "visit_id": visit.id if visit else None,

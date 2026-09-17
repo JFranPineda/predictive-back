@@ -5,6 +5,7 @@ from modules.measurements.interfaces.catalogue_views import (
     TechniqueListView,
     UnitListView,
 )
+from modules.measurements.interfaces.export_views import RecordExportView
 from modules.measurements.interfaces.matrix_views import EquipmentMatrixView
 from modules.measurements.interfaces.views import TrendView
 
@@ -14,6 +15,11 @@ urlpatterns = [
         "equipments/<int:equipment_id>/matrix/",
         EquipmentMatrixView.as_view(),
         name="equipment-matrix",
+    ),
+    path(
+        "equipments/<int:equipment_id>/matrix/export/",
+        RecordExportView.as_view(),
+        name="equipment-matrix-export",
     ),
     path("techniques/", TechniqueListView.as_view(), name="techniques"),
     path("units/", UnitListView.as_view(), name="units"),
