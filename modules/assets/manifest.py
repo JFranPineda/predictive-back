@@ -17,6 +17,8 @@ MANIFEST = Manifest(
     menu=(
         MenuItem(label="Activos", route="/assets", icon="factory", order=20,
                  permission="assets.view_equipment"),
+        MenuItem(label="Estructura", route="/assets/structure", icon="sitemap", order=21,
+                 permission="assets.view_equipment"),
     ),
     events_published=("EquipmentStatusChanged",),
 )

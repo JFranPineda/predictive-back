@@ -39,6 +39,7 @@ class AreaViewSet(TenantViewSet):
         queryset = (
             Area.objects.for_company(self.request.company_id)
             .annotate(equipment_count=Count("sectors__groups__equipments"))
+            .prefetch_related("sectors")
             .order_by("code")
         )
         areas = self.allowed_areas()

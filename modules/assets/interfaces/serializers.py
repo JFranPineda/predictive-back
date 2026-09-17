@@ -25,10 +25,16 @@ class StatusField(serializers.Serializer):
 
 class AreaSerializer(serializers.ModelSerializer):
     equipment_count = serializers.IntegerField(read_only=True)
+    sectors = serializers.SerializerMethodField()
 
     class Meta:
         model = Area
-        fields = ["id", "code", "name", "parent", "criticality", "equipment_count"]
+        fields = ["id", "code", "name", "parent", "criticality", "equipment_count", "sectors"]
+
+    def get_sectors(self, obj):
+        # The structure screen attaches a machine train to a sector, so it
+        # needs the sectors by id rather than by name.
+        return [{"id": sector.id, "name": sector.name} for sector in obj.sectors.all()]
 
 
 class EquipmentSerializer(serializers.ModelSerializer):
