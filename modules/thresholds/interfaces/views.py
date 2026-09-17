@@ -93,15 +93,21 @@ class StandardListView(APIView):
         language = getattr(request, "language", "es")
         queryset = (
             ThresholdStandard.objects.for_company(request.company_id)
-            .prefetch_related("machine_classes")
+            .prefetch_related("machine_classes", "techniques")
             .order_by("name")
         )
         return Response([
             {
                 "id": row.id, "code": row.code, "name": row.translated("name", language),
-                "source": row.source, "is_builtin": row.is_builtin, "is_active": row.is_active,
+                "names": row.translations.get("name") or {},
+                "source": row.source, "description": row.description,
+                "is_builtin": row.is_builtin, "is_active": row.is_active,
+                "techniques": [
+                    {"code": t.code, "name": t.translated("name", language)}
+                    for t in row.techniques.all()
+                ],
                 "machine_classes": [
-                    {"code": mc.code, "name": mc.name, "description": mc.description}
+                    {"id": mc.id, "code": mc.code, "name": mc.name, "description": mc.description}
                     for mc in row.machine_classes.all()
                 ],
                 "set_count": row.sets.count(),
