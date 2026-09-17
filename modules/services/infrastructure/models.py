@@ -67,6 +67,12 @@ class ServiceVisit(TenantModel):
     )
     duration_min = models.PositiveSmallIntegerField(null=True, blank=True)
     geo = models.JSONField(null=True, blank=True)
+    # Optional, one or several: what this service found. Kept beside the
+    # diary rather than inside it, because "how many misalignments this
+    # quarter" has to be a query, not a reading exercise.
+    fault_modes = models.ManyToManyField(
+        "diagnostics.FaultMode", blank=True, related_name="visits"
+    )
     is_closed = models.BooleanField(default=False)
     closed_at = models.DateTimeField(null=True, blank=True)
     closed_by = models.ForeignKey("security.User", on_delete=models.SET_NULL, null=True, related_name="+")

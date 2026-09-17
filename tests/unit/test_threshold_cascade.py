@@ -13,6 +13,7 @@ import pytest
 
 from modules.thresholds.domain.defaults import (
     ALARM,
+    ISO_BANDS_BY_CLASS,
     OFF,
     OPERATIONAL,
     RETIRED,
@@ -36,6 +37,7 @@ from modules.thresholds.domain.errors import (
     StatusNotInProfile,
 )
 from modules.thresholds.domain.services import (
+    classify_context,
     declare_availability,
     evaluate,
     resolve,
@@ -65,9 +67,9 @@ def make_set(set_id, scope, ref, low, high, **kwargs):
 
 
 ISO = make_set(1, Scope.EQUIPMENT_TYPE, "motor", "4.5", "7.1",
-               standard_code="iso_10816_3", machine_class="class_iii")
+               standard_code="iso_10816_3", machine_class="group_1_rigid")
 ISO_20816 = make_set(2, Scope.EQUIPMENT_TYPE, "motor", "3.5", "6.1",
-                     standard_code="iso_20816_3", machine_class="class_iii")
+                     standard_code="iso_20816_3", machine_class="group_1_rigid")
 TAC = make_set(3, Scope.EQUIPMENT_TYPE, "pump", "5.4", "8.1", standard_code="technical_associates")
 EB228 = make_set(4, Scope.EQUIPMENT, 228, "4.5", "6.5", rationale="historial del equipo")
 
@@ -82,12 +84,12 @@ def ctx(**kwargs):
 class TestResolution:
     def test_falls_back_to_the_standard_of_the_equipment_type(self):
         context = ctx(equipment_id=999, equipment_type="motor",
-                      machine_class="class_iii", standard_code="iso_10816_3")
+                      machine_class="group_1_rigid", standard_code="iso_10816_3")
         assert resolve(ALL, context, date(2026, 1, 1)) is ISO
 
     def test_equipment_override_beats_the_standard(self):
         context = ctx(equipment_id=228, equipment_type="motor",
-                      machine_class="class_iii", standard_code="iso_10816_3")
+                      machine_class="group_1_rigid", standard_code="iso_10816_3")
         assert resolve(ALL, context, date(2026, 1, 1)) is EB228
 
     def test_pump_and_motor_do_not_share_limits(self):
@@ -97,7 +99,7 @@ class TestResolution:
     def test_expired_override_returns_the_equipment_to_the_standard(self):
         expired = make_set(5, Scope.EQUIPMENT, 228, "4.5", "6.5", valid_to=date(2025, 12, 31))
         context = ctx(equipment_id=228, equipment_type="motor",
-                      machine_class="class_iii", standard_code="iso_10816_3")
+                      machine_class="group_1_rigid", standard_code="iso_10816_3")
         assert resolve((ISO, expired), context, date(2026, 1, 1)) is ISO
 
     def test_no_criterion_yields_no_verdict(self):
@@ -109,7 +111,7 @@ class TestStandardSelection:
     therefore its status, without touching any threshold row."""
 
     def test_the_assigned_standard_decides_which_limits_apply(self):
-        motor = {"equipment_type": "motor", "machine_class": "class_iii"}
+        motor = {"equipment_type": "motor", "machine_class": "group_1_rigid"}
         under_10816 = resolve(ALL, ctx(**motor, standard_code="iso_10816_3"), date(2026, 1, 1))
         under_20816 = resolve(ALL, ctx(**motor, standard_code="iso_20816_3"), date(2026, 1, 1))
         assert under_10816 is ISO
@@ -121,8 +123,12 @@ class TestStandardSelection:
         assert evaluate(value, ISO_20816).status.code == "shutdown"
 
     def test_a_machine_class_the_standard_does_not_define_is_rejected(self):
-        assert standard_for("iso_10816_3").has_class("class_iii")
-        assert not standard_for("iso_10816_3").has_class("category_i")
+        # "Clase III" is ISO 10816-1 language; the -3 grades by group and
+        # foundation. Mixing the two vocabularies is how a machine ends up
+        # judged against a table that never described it.
+        assert standard_for("iso_10816_3").has_class("group_2_rigid")
+        assert not standard_for("iso_10816_3").has_class("class_iii")
+        assert standard_for("iso_10816_1").has_class("class_iii")
 
     def test_a_hand_written_override_ignores_the_standard_filter(self):
         # EB 228 carries no standard, so it competes whatever is assigned.
@@ -279,3 +285,70 @@ class TestStandardBelongsToATechnique:
         offered = {s.code for s in standards_for_technique(STANDARDS, "ultrasound")}
         assert "iso_10816_3" not in offered
         assert "iso_29821" in offered
+
+
+class TestClassifyByPower:
+    """The field crew types the motor's rated power; the class follows.
+
+    Expecting an office to remember which ISO group each of 558 machines
+    belongs to is how a plant ends up judging everything against one number.
+    """
+
+    iso_3 = standard_for("iso_10816_3")
+    iso_1 = standard_for("iso_10816_1")
+
+    def test_a_small_motor_is_class_i(self):
+        # 20 HP ≈ 15 kW: the top of Class I, so it already belongs above it.
+        assert self.iso_1.classify(11).code == "class_i"
+        assert self.iso_1.classify(15).code == "class_ii"
+
+    def test_the_range_the_crew_works_in(self):
+        # 0 to 60 HP is 0 to ~45 kW: Class I then Class II.
+        assert self.iso_1.classify(7.5).code == "class_i"
+        assert self.iso_1.classify(45).code == "class_ii"
+
+    def test_medium_machines_are_group_2(self):
+        assert self.iso_3.classify(45, "rigid").code == "group_2_rigid"
+        assert self.iso_3.classify(45, "flexible").code == "group_2_flexible"
+
+    def test_the_foundation_changes_the_class(self):
+        rigid = self.iso_3.classify(400, "rigid")
+        flexible = self.iso_3.classify(400, "flexible")
+        assert (rigid.code, flexible.code) == ("group_1_rigid", "group_1_flexible")
+
+    def test_the_boundary_belongs_upwards(self):
+        # 300 kW is the start of Group 1, not the end of Group 2.
+        assert self.iso_3.classify(299.9, "rigid").code == "group_2_rigid"
+        assert self.iso_3.classify(300, "rigid").code == "group_1_rigid"
+
+    def test_no_power_means_no_guess(self):
+        # Inventing a class for a machine whose nameplate nobody recorded
+        # would be inventing the limits it is judged against.
+        assert self.iso_3.classify(None) is None
+
+    def test_a_standard_without_power_ranges_never_classifies(self):
+        assert standard_for("technical_associates").classify(45) is None
+
+    def test_every_class_of_the_iso_tables_has_published_bands(self):
+        for standard in (self.iso_1, self.iso_3):
+            for machine_class in standard.machine_classes:
+                assert machine_class.code in ISO_BANDS_BY_CLASS
+
+
+class TestClassifyFillsTheContext:
+    def test_the_cascade_uses_the_class_it_worked_out(self):
+        context = ctx(equipment_type="motor", rated_power_kw=45, mounting="rigid")
+        filled = classify_context(context, standard_for("iso_10816_3"))
+        assert filled.machine_class == "group_2_rigid"
+
+    def test_an_explicit_class_is_never_overridden(self):
+        # An engineer who set the class by hand knows something the nameplate
+        # does not say.
+        context = ctx(machine_class="group_1_rigid", rated_power_kw=45, mounting="rigid")
+        assert classify_context(context, standard_for("iso_10816_3")).machine_class == (
+            "group_1_rigid"
+        )
+
+    def test_without_a_standard_nothing_is_guessed(self):
+        context = ctx(rated_power_kw=45)
+        assert classify_context(context, None).machine_class is None

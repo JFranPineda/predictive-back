@@ -83,13 +83,24 @@ class ThresholdStandard(TenantModel, TranslatableModel):
 
 
 class MachineClass(TranslatableModel):
-    """ISO 10816-3 groups machines I..IV; ISO 10816-7 uses categories. The
-    groups belong to the standard, not to the equipment."""
+    """The groups a standard grades by. They belong to the standard, not to
+    the equipment.
+
+    The power range is what lets the system pick the class from the
+    nameplate: ISO grades a 45 kW pump and a 400 kW one against different
+    limits, and nobody can be expected to remember which group each of
+    hundreds of machines falls in.
+    """
+
+    MOUNTINGS = [("any", "Cualquiera"), ("rigid", "Rígida"), ("flexible", "Flexible")]
 
     standard = models.ForeignKey(ThresholdStandard, on_delete=models.CASCADE, related_name="machine_classes")
     code = models.SlugField(max_length=30)
     name = models.CharField(max_length=80)
     description = models.CharField(max_length=240, blank=True)
+    power_min_kw = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    power_max_kw = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    mounting = models.CharField(max_length=10, choices=MOUNTINGS, default="any")
     order = models.PositiveSmallIntegerField(default=0)
 
     class Meta:

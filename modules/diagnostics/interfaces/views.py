@@ -1,0 +1,95 @@
+"""The failure catalogue, and what each service found."""
+
+from __future__ import annotations
+
+from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from modules.diagnostics.models import FaultMode
+from modules.security.application.access import build_actor
+from modules.security.domain.policies import can_write_log_entry
+from modules.services.interfaces.visit_views import _load, _reference
+
+
+class FaultModeListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        language = getattr(request, "language", "es")
+        queryset = FaultMode.objects.for_company(request.company_id).filter(is_active=True)
+        if request.query_params.get("technique"):
+            # Each service reports its own vocabulary: a thermography visit
+            # has no business offering "desalineamiento".
+            queryset = queryset.filter(technique_code=request.query_params["technique"])
+        return Response([
+            {
+                "id": row.id,
+                "code": row.code,
+                "name": row.translated("name", language),
+                "technique_code": row.technique_code,
+                "signature": row.typical_signature,
+                "reference": row.iso_reference,
+            }
+            for row in queryset.order_by("name")
+        ])
+
+    def post(self, request):
+        actor = build_actor(request.user, request.company_id)
+        if not actor.has("diagnostics.close_recommendation"):
+            raise PermissionDenied("Falta el permiso para gestionar el catálogo")
+        name = (request.data.get("name") or "").strip()
+        if not name:
+            raise ValidationError("El nombre es obligatorio")
+        code = _slug(request.data.get("code") or name)
+        if FaultMode.objects.for_company(request.company_id).filter(code=code).exists():
+            raise ValidationError(f"Ya existe el modo de falla '{code}'")
+        fault = FaultMode.objects.create(
+            company_id=request.company_id, code=code, name=name,
+            technique_code=(request.data.get("technique_code") or "").strip(),
+            typical_signature=(request.data.get("signature") or "").strip(),
+            iso_reference=(request.data.get("reference") or "").strip(),
+            translations={"name": {"es": name}},
+        )
+        return Response({"id": fault.id, "code": fault.code, "name": fault.name}, status=201)
+
+
+class VisitFaultsView(APIView):
+    """What this service found. Optional, and one or several."""
+
+    permission_classes = [IsAuthenticated]
+
+    def put(self, request, visit_id: int):
+        visit = _load(request, visit_id)
+        actor = build_actor(request.user, request.company_id)
+        if not can_write_log_entry(actor, _reference(visit)):
+            raise PermissionDenied("Esta visita no es tuya o ya está cerrada")
+
+        codes = list(request.data.get("codes") or [])
+        technique = visit.service_order.technique.code
+        faults = list(
+            FaultMode.objects.for_company(request.company_id).filter(code__in=codes)
+        )
+        wrong = [
+            fault.code
+            for fault in faults
+            if fault.technique_code and fault.technique_code != technique
+        ]
+        if wrong:
+            raise ValidationError(
+                f"Estos modos de falla no pertenecen a {technique}: {', '.join(wrong)}"
+            )
+        unknown = set(codes) - {fault.code for fault in faults}
+        if unknown:
+            raise ValidationError(f"Modos de falla desconocidos: {', '.join(sorted(unknown))}")
+
+        visit.fault_modes.set(faults)
+        return Response({"codes": sorted(fault.code for fault in faults)})
+
+
+def _slug(value: str) -> str:
+    cleaned = "".join(c if c.isalnum() else "_" for c in (value or "").strip().lower())
+    while "__" in cleaned:
+        cleaned = cleaned.replace("__", "_")
+    return cleaned.strip("_") or "falla"

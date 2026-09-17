@@ -7,7 +7,14 @@ python rather than YAML because the domain tests assert against them.
 
 from __future__ import annotations
 
-from .entities import MachineClass, Standard, Status, StatusKind, TechniqueStatusProfile
+from .entities import (
+    MachineClass,
+    Mounting,
+    Standard,
+    Status,
+    StatusKind,
+    TechniqueStatusProfile,
+)
 
 # --- statuses ---------------------------------------------------------------
 OPERATIONAL = Status(
@@ -79,11 +86,53 @@ def profile_for(technique_code: str) -> TechniqueStatusProfile:
 
 
 # --- standards --------------------------------------------------------------
+# ISO 10816-3 grades by power *and* by what the machine stands on. The power
+# ranges are what let the system classify a machine from its nameplate instead
+# of asking somebody to remember which group a 45 kW pump belongs to.
+#
+# Small machines fall outside 10816-3 (it starts at 15 kW), so the classes of
+# ISO 10816-1 cover them — which is the range the field crew works in most:
+# motors of 0 to 60 HP.
 ISO_10816_3_CLASSES = (
-    MachineClass("class_i", "Clase I", "Máquinas pequeñas hasta 15 kW"),
-    MachineClass("class_ii", "Clase II", "Máquinas medianas de 15 a 75 kW"),
-    MachineClass("class_iii", "Clase III", "Máquinas grandes sobre cimentación rígida"),
-    MachineClass("class_iv", "Clase IV", "Máquinas grandes sobre cimentación flexible"),
+    MachineClass(
+        "group_2_rigid", "Grupo 2 · cimentación rígida",
+        "15 a 300 kW (20 a 400 HP) sobre base rígida",
+        power_min_kw=15, power_max_kw=300, mounting=Mounting.RIGID,
+    ),
+    MachineClass(
+        "group_2_flexible", "Grupo 2 · cimentación flexible",
+        "15 a 300 kW (20 a 400 HP) sobre base flexible",
+        power_min_kw=15, power_max_kw=300, mounting=Mounting.FLEXIBLE,
+    ),
+    MachineClass(
+        "group_1_rigid", "Grupo 1 · cimentación rígida",
+        "300 kW a 50 MW sobre base rígida",
+        power_min_kw=300, power_max_kw=50_000, mounting=Mounting.RIGID,
+    ),
+    MachineClass(
+        "group_1_flexible", "Grupo 1 · cimentación flexible",
+        "300 kW a 50 MW sobre base flexible",
+        power_min_kw=300, power_max_kw=50_000, mounting=Mounting.FLEXIBLE,
+    ),
+)
+
+ISO_10816_1_CLASSES = (
+    MachineClass(
+        "class_i", "Clase I", "Hasta 15 kW (20 HP): motores y bombas pequeñas",
+        power_min_kw=0, power_max_kw=15,
+    ),
+    MachineClass(
+        "class_ii", "Clase II", "15 a 75 kW (20 a 100 HP) sin cimentación especial",
+        power_min_kw=15, power_max_kw=75,
+    ),
+    MachineClass(
+        "class_iii", "Clase III", "Sobre 75 kW (100 HP) en cimentación rígida",
+        power_min_kw=75, power_max_kw=50_000, mounting=Mounting.RIGID,
+    ),
+    MachineClass(
+        "class_iv", "Clase IV", "Sobre 75 kW (100 HP) en cimentación flexible",
+        power_min_kw=75, power_max_kw=50_000, mounting=Mounting.FLEXIBLE,
+    ),
 )
 
 STANDARDS: tuple[Standard, ...] = (
@@ -100,6 +149,14 @@ STANDARDS: tuple[Standard, ...] = (
         name="ISO 20816-3",
         source="Sucesora de ISO 10816-3, misma clasificación por grupos",
         machine_classes=ISO_10816_3_CLASSES,
+        techniques=("vibration",),
+        is_builtin=True,
+    ),
+    Standard(
+        code="iso_10816_1",
+        name="ISO 10816-1",
+        source="Clases I a IV por potencia; cubre las máquinas pequeñas de 0 a 60 HP",
+        machine_classes=ISO_10816_1_CLASSES,
         techniques=("vibration",),
         is_builtin=True,
     ),
@@ -171,6 +228,28 @@ STANDARDS: tuple[Standard, ...] = (
         is_builtin=True,
     ),
 )
+
+
+# Zone boundaries in mm/s RMS, as the tables publish them: good / acceptable
+# (alarm) / unacceptable (shutdown).
+ISO_BANDS_BY_CLASS: dict[str, tuple[str, str]] = {
+    # ISO 10816-3
+    "group_2_rigid": ("2.8", "4.5"),
+    "group_2_flexible": ("4.5", "7.1"),
+    "group_1_rigid": ("4.5", "7.1"),
+    "group_1_flexible": ("7.1", "11.0"),
+    # ISO 10816-1
+    "class_i": ("1.8", "4.5"),
+    "class_ii": ("2.8", "7.1"),
+    "class_iii": ("4.5", "11.2"),
+    "class_iv": ("7.1", "18.0"),
+}
+
+# NETA MTS thermographic criteria for electrical equipment. Two comparisons,
+# not one: against a similar component under similar load, and against
+# ambient. A panel reading 45 °C means nothing until you know which.
+NETA_DELTA_SIMILAR = ("4", "15")
+NETA_DELTA_AMBIENT = ("11", "40")
 
 
 def standard_for(code: str) -> Standard:

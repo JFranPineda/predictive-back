@@ -140,13 +140,15 @@ def _operating(request, columns: list[dict]) -> tuple[dict, dict]:
 def _bands(request, equipment_id: int) -> list[ExportBand]:
     """The limits actually in force for this equipment, resolved through the
     same cascade that graded the readings."""
-    from modules.thresholds.domain.entities import Aggregation, EvaluationContext
+    from modules.thresholds.application.evaluation import context_for
     from modules.thresholds.domain.services import resolve
     from modules.thresholds.infrastructure.repositories import DjangoThresholdRepository
 
     equipment = (
         Equipment.objects.for_company(request.company_id)
-        .select_related("asset_group", "applied_standard", "machine_class")
+        .select_related(
+            "asset_group__kind", "applied_standard", "machine_class", "nameplate"
+        )
         .filter(id=equipment_id)
         .first()
     )
@@ -156,15 +158,7 @@ def _bands(request, equipment_id: int) -> list[ExportBand]:
     repository = DjangoThresholdRepository(getattr(request, "language", "es"))
     bands: list[ExportBand] = []
     for magnitude_code, aggregation in (("vel_rms", "rms"), ("env_accel", "peak")):
-        context = EvaluationContext(
-            magnitude_code=magnitude_code,
-            aggregation=Aggregation(aggregation),
-            equipment_id=equipment.id,
-            equipment_type=equipment.equipment_type,
-            asset_group_kind=equipment.asset_group.kind.code if equipment.asset_group.kind else None,
-            machine_class=equipment.machine_class.code if equipment.machine_class_id else None,
-            standard_code=equipment.applied_standard.code if equipment.applied_standard_id else None,
-        )
+        context = context_for(equipment, magnitude_code, aggregation)
         chosen = resolve(
             repository.candidates(request.company_id, magnitude_code), context, date.today()
         )

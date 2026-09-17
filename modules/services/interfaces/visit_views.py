@@ -44,7 +44,7 @@ def _load(request, visit_id: int) -> ServiceVisit:
             "availability_status",
             "instrument",
         )
-        .prefetch_related("participants__user")
+        .prefetch_related("participants__user", "fault_modes")
         .get(id=visit_id)
     )
 
@@ -139,6 +139,11 @@ class VisitDetailView(APIView):
                 }
                 for entry in entries
             ],
+            "fault_modes": [
+                {"code": fault.code, "name": fault.translated("name", language),
+                 "reference": fault.iso_reference}
+                for fault in visit.fault_modes.all()
+            ],
             "is_closed": visit.is_closed,
             "report_issued": False,
             "can_edit": can_edit_visit(actor, reference),
@@ -162,7 +167,13 @@ class VisitReadingsView(APIView):
         readings = list(
             Reading.objects.for_company(request.company_id)
             .filter(service_visit=visit, id__in=updates)
-            .select_related("magnitude", "point__equipment")
+            .select_related(
+                "magnitude",
+                "point__equipment__nameplate",
+                "point__equipment__applied_standard",
+                "point__equipment__machine_class",
+                "point__equipment__asset_group__kind",
+            )
         )
         saved = 0
         for reading in readings:
@@ -227,24 +238,16 @@ def _decimal(raw) -> Decimal | None:
 def _evaluate(company_id: int, reading: Reading):
     """Re-runs the cascade for the value just typed, so the status the
     inspector sees is the one the system will report."""
-    from modules.thresholds.domain.entities import Aggregation, EvaluationContext
+    from modules.thresholds.application.evaluation import context_for
     from modules.thresholds.domain.services import evaluate, resolve
     from modules.thresholds.infrastructure.models import Status
     from modules.thresholds.infrastructure.repositories import DjangoThresholdRepository
 
     if reading.value is None:
         return None
-    equipment = reading.point.equipment
     candidates = DjangoThresholdRepository().candidates(company_id, reading.magnitude.code)
-    context = EvaluationContext(
-        magnitude_code=reading.magnitude.code,
-        aggregation=Aggregation(reading.aggregation),
-        point_id=reading.point_id,
-        equipment_id=equipment.id,
-        equipment_type=equipment.equipment_type,
-        asset_group_kind=equipment.asset_group.kind,
-        machine_class=equipment.machine_class.code if equipment.machine_class_id else None,
-        standard_code=equipment.applied_standard.code if equipment.applied_standard_id else None,
+    context = context_for(
+        reading.point.equipment, reading.magnitude.code, reading.aggregation, reading.point_id
     )
     verdict = evaluate(reading.value, resolve(candidates, context, reading.taken_at.date()))
     if verdict.status is None:

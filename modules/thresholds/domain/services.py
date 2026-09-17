@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -15,6 +16,21 @@ from .entities import (
     ThresholdSet,
 )
 from .errors import OverlappingBands, StandardTechniqueMismatch, StatusNotInProfile
+
+
+def classify_context(context: EvaluationContext, standard: Standard | None) -> EvaluationContext:
+    """Fills in the machine class from the nameplate when nobody set one.
+
+    ISO 10816-3 grades a 45 kW pump and a 400 kW one against different limits.
+    Expecting the office to remember which group each of 558 machines belongs
+    to is how a plant ends up judging everything against one number.
+    """
+    if context.machine_class or standard is None:
+        return context
+    guessed = standard.classify(context.rated_power_kw, context.mounting)
+    if guessed is None:
+        return context
+    return replace(context, machine_class=guessed.code)
 
 
 def resolve(

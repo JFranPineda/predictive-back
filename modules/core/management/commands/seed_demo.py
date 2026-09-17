@@ -34,13 +34,18 @@ from modules.assets.models import (
     Sector,
 )
 from modules.core.models import Company, InstalledModule
+from modules.diagnostics.domain.catalogue import ALL_FAULTS
 from modules.diagnostics.models import EquipmentLogEntry, FaultMode
+from modules.nameplate.models import NameplateData
 from modules.operating_data.models import OperatingParameter, OperatingReading
 from modules.measurements.models import Instrument, Magnitude, Reading, Technique, Unit
 from modules.security.models import Membership, Permission, Role, User
 from modules.services.models import ServiceOrder, ServicePlan, ServiceVisit, VisitParticipant
 from modules.thresholds.domain.defaults import (
     ALL_STATUSES,
+    ISO_BANDS_BY_CLASS,
+    NETA_DELTA_AMBIENT,
+    NETA_DELTA_SIMILAR,
     PROFILES,
     STANDARDS,
     TRANSLATIONS,
@@ -85,7 +90,10 @@ MAGNITUDES = [
     ("vel_rms", "vibration", "Velocidad vibracional", "Vibration velocity", "mm/s", "rms", 2),
     ("env_accel", "vibration", "Envolvente de aceleración", "Acceleration envelope", "gE", "peak", 2),
     ("temp", "thermography", "Temperatura", "Temperature", "°C", "max", 0),
-    ("delta_temp", "thermography", "Diferencia de temperatura", "Temperature difference", "°C", "max", 1),
+    ("delta_temp", "thermography", "ΔT contra componente similar",
+     "ΔT against a similar component", "°C", "max", 1),
+    ("delta_temp_ambient", "thermography", "ΔT sobre ambiente", "ΔT over ambient",
+     "°C", "max", 1),
     ("us_db", "ultrasound", "Nivel de ultrasonido", "Ultrasound level", "dB", "avg", 1),
     ("viscosity_40", "oil_analysis", "Viscosidad a 40 °C", "Viscosity at 40 °C", "cSt", "avg", 1),
     ("water_ppm", "oil_analysis", "Contenido de agua", "Water content", "ppm", "avg", 0),
@@ -104,8 +112,6 @@ THRESHOLDS = [
     ("env_accel", "peak", "gE", "global", None, None, None, "2.5", "4.0", "Envolvente en Gs pico"),
     ("env_accel", "peak_to_peak", "gE", "global", None, None, None, "9.0", "15.0", "Envolvente en Gs pico-pico"),
     ("temp", "max", "°C", "global", None, None, None, "60", "80", "Criterio térmico general"),
-    ("delta_temp", "max", "°C", "global", None, "neta_mts", None, "10", "30",
-     "ΔT sobre equipo similar en igual carga, según NETA MTS"),
     ("us_db", "avg", "dB", "global", None, "iso_29821", None, "10", "20",
      "Incremento sobre la línea base del punto"),
     ("water_ppm", "avg", "ppm", "global", None, "iso_14830_1", None, "200", "500",
@@ -190,6 +196,7 @@ class Command(BaseCommand):
         equipment = self._assets(company, plant, rgp, standards, statuses, kinds)
         self._readings(company, equipment, magnitudes, units, statuses, instruments, users,
                        plant, options["rounds"], docs)
+        self._nameplates(company, equipment)
         self._diary(company, equipment, users)
 
         self.stdout.write(self.style.SUCCESS(
@@ -253,6 +260,9 @@ class Command(BaseCommand):
                 MachineClass.objects.create(
                     standard=row, code=machine_class.code, name=machine_class.name,
                     description=machine_class.description, order=order,
+                    power_min_kw=machine_class.power_min_kw,
+                    power_max_kw=machine_class.power_max_kw,
+                    mounting=machine_class.mounting.value,
                 )
             created[standard.code] = row
         return created
@@ -297,8 +307,47 @@ class Command(BaseCommand):
                 company, statuses, standards, magnitude, aggregation, unit, scope, ref,
                 standard, machine_class, low, high, rationale,
             )
-        # The EB 228 override: stricter than the ISO, "de acuerdo a historial".
-        self._eb228_override = (Decimal("4.5"), Decimal("6.5"))
+        self._iso_class_bands(company, statuses, standards)
+        self._neta_bands(company, statuses, standards)
+
+    def _iso_class_bands(self, company, statuses, standards) -> None:
+        """One band set per machine class, as the ISO tables publish them.
+
+        This is what makes the limits follow the motor's power: the class is
+        worked out from the nameplate and the set that matches it wins.
+        """
+        for standard_code in ("iso_10816_1", "iso_10816_3"):
+            standard = standards.get(standard_code)
+            if standard is None:
+                continue
+            for machine_class in standard.machine_classes.all():
+                bounds = ISO_BANDS_BY_CLASS.get(machine_class.code)
+                if bounds is None:
+                    continue
+                self._threshold_set(
+                    company, statuses, standards, "vel_rms", "rms", "mm/s",
+                    "global", None, standard_code, machine_class.code,
+                    bounds[0], bounds[1],
+                    f"{standard.name} · {machine_class.name}",
+                )
+
+    def _neta_bands(self, company, statuses, standards) -> None:
+        """Thermography on electrical panels is a comparison, not a reading.
+
+        NETA MTS grades the difference against a similar component under the
+        same load, and against ambient. A panel at 45 °C means nothing until
+        you know which of the two you are looking at.
+        """
+        for magnitude, bounds, rationale in (
+            ("delta_temp", NETA_DELTA_SIMILAR,
+             "ΔT contra un componente similar con igual carga (NETA MTS)"),
+            ("delta_temp_ambient", NETA_DELTA_AMBIENT,
+             "ΔT sobre la temperatura ambiente (NETA MTS)"),
+        ):
+            self._threshold_set(
+                company, statuses, standards, magnitude, "max", "°C",
+                "global", None, "neta_mts", None, bounds[0], bounds[1], rationale,
+            )
 
     def _threshold_set(self, company, statuses, standards, magnitude, aggregation, unit,
                        scope, ref, standard_code, machine_class_code, low, high, rationale,
@@ -671,6 +720,38 @@ class Command(BaseCommand):
         Equipment.objects.bulk_update(equipment, ["condition_status"], batch_size=500)
 
 
+    def _nameplates(self, company, equipment) -> None:
+        """Rated power and foundation: the two fields that decide which ISO
+        table a machine is judged against."""
+        powers = {
+            "motor": (7.5, 15, 22, 45, 75, 160, 315),
+            "pump": (7.5, 15, 22, 45, 75),
+            "compressor": (45, 75, 160, 315),
+            "blower": (15, 22, 45),
+            "fan": (7.5, 15, 22),
+            "gearbox": (15, 45, 75),
+        }
+        rows = []
+        for item in equipment:
+            options = powers.get(item.equipment_type)
+            if not options:
+                continue
+            rows.append(NameplateData(
+                company=company, equipment=item,
+                manufacturer=random.choice(["SIEMENS", "WEG", "ABB", "US MOTORS"]),
+                rated_power_kw=Decimal(str(random.choice(options))),
+                rated_rpm=random.choice([1750, 1780, 3550, 1180]),
+                rated_voltage_v=random.choice([440, 460, 4160]),
+                mounting=random.choice(["rigid", "rigid", "flexible"]),
+                source="nameplate_photo",
+            ))
+        NameplateData.objects.bulk_create(rows, batch_size=500)
+
+        # With a nameplate in place the class is derived, so the explicit one
+        # the importer guessed is cleared: an explicit class always wins, and
+        # a guess should not.
+        Equipment.objects.filter(company=company).update(machine_class=None)
+
     def _diary(self, company, equipment, users) -> None:
         """The conclusions and recommendations the analysts actually wrote.
 
@@ -679,11 +760,14 @@ class Command(BaseCommand):
         execution screen look like a list of numbers with no findings.
         """
         faults = {
-            code: FaultMode.objects.create(
-                company=company, code=code, name=name_es, technique_code="vibration",
-                translations={"name": {"es": name_es, "en": name_en}},
+            definition.code: FaultMode.objects.create(
+                company=company, code=definition.code, name=definition.name_es,
+                technique_code=definition.technique,
+                typical_signature=definition.signature,
+                iso_reference=definition.reference,
+                translations={"name": {"es": definition.name_es, "en": definition.name_en}},
             )
-            for code, name_es, name_en in FAULT_MODES
+            for definition in ALL_FAULTS
         }
         analyst = users["CT"]
         entries = []
@@ -710,10 +794,16 @@ class Command(BaseCommand):
         # Link each conclusion to the fault modes its own wording names.
         for entry in EquipmentLogEntry.objects.filter(entry_type="conclusion"):
             lowered = entry.text.lower()
-            matched = [faults[code] for code, keywords in FAULT_KEYWORDS.items()
-                       if any(word in lowered for word in keywords)]
+            matched = [
+                faults[code]
+                for code, keywords in FAULT_KEYWORDS.items()
+                if code in faults and any(word in lowered for word in keywords)
+            ]
             if matched:
                 entry.fault_modes.set(matched)
+                # The same finding on the visit, where it can be counted.
+                if entry.service_visit_id:
+                    entry.service_visit.fault_modes.set(matched)
 
 
 OPERATING_PARAMETERS = [
@@ -752,26 +842,15 @@ GROUP_KINDS = [
     ("standalone", "Equipo aislado", [("EQUIPO", "other", "driver")]),
 ]
 
-FAULT_MODES = [
-    ("misalignment", "Desalineamiento", "Misalignment"),
-    ("mechanical_looseness", "Soltura mecánica", "Mechanical looseness"),
-    ("bearing_wear", "Desgaste de rodamientos", "Bearing wear"),
-    ("soft_foot", "Pata coja", "Soft foot"),
-    ("induced_stress", "Tensiones inducidas", "Induced stress"),
-    ("gmf", "Frecuencia de engrane (GMF)", "Gear mesh frequency"),
-    ("lubrication", "Deficiencia de lubricación", "Lubrication deficiency"),
-    ("belt_wear", "Desgaste de fajas o poleas", "Belt or pulley wear"),
-]
-
 FAULT_KEYWORDS = {
-    "misalignment": ("desalinea", "desalinia", "dessalinea"),
+    "misalignment_parallel": ("desalinea", "desalinia", "dessalinea"),
     "mechanical_looseness": ("soltura", "juego radial"),
     "bearing_wear": ("rodamiento",),
     "soft_foot": ("pata coja",),
     "induced_stress": ("tension", "tensión"),
-    "gmf": ("gmf", "engrane"),
-    "lubrication": ("lubrica",),
-    "belt_wear": ("faja", "polea"),
+    "gear_defect": ("gmf", "engrane"),
+    "lubrication_deficiency": ("lubrica",),
+    "belt_pulley": ("faja", "polea"),
 }
 
 

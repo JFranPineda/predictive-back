@@ -11,9 +11,10 @@ class FaultMode(TenantModel, TranslatableModel):
 
     code = models.SlugField(max_length=40)
     name = models.CharField(max_length=120)
-    technique_code = models.SlugField(max_length=30, blank=True)
+    technique_code = models.SlugField(max_length=30, blank=True, db_index=True)
     typical_signature = models.CharField(max_length=240, blank=True)
-    iso_reference = models.CharField(max_length=60, blank=True)
+    iso_reference = models.CharField(max_length=80, blank=True)
+    is_active = models.BooleanField(default=True)
 
     class Meta:
         unique_together = [("company", "code")]

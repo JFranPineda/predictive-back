@@ -91,15 +91,48 @@ class TechniqueStatusProfile:
         return max(conditions, key=lambda s: s.severity) if conditions else None
 
 
+class Mounting(StrEnum):
+    """ISO 10816-3 grades the same machine differently depending on what it
+    stands on: a flexible foundation absorbs vibration the rigid one passes to
+    the structure."""
+
+    RIGID = "rigid"
+    FLEXIBLE = "flexible"
+    ANY = "any"
+
+
 @dataclass(frozen=True, slots=True)
 class MachineClass:
-    """ISO 10816-3 splits machines by power and mounting (I..IV); other
-    standards use their own groups. The class is part of the standard, not a
-    free-text field on the equipment."""
+    """ISO 10816-3 splits machines by power and mounting; other standards use
+    their own groups. The class belongs to the standard, not to the equipment.
+
+    `power_min_kw` / `power_max_kw` are what let the system pick the class on
+    its own: the field crew types the motor's rated power, and the limits that
+    apply follow from the standard instead of from somebody remembering which
+    group a 45 kW pump belongs to.
+    """
 
     code: str
     name: str
     description: str = ""
+    power_min_kw: float | None = None
+    power_max_kw: float | None = None
+    mounting: Mounting = Mounting.ANY
+
+    def covers(self, power_kw: float | None, mounting: str | None = None) -> bool:
+        if self.mounting is not Mounting.ANY and mounting and mounting != self.mounting.value:
+            return False
+        if self.power_min_kw is None and self.power_max_kw is None:
+            return False
+        if power_kw is None:
+            return False
+        # Ranges are half-open upwards: 15 kW belongs to the 15-300 group, and
+        # 300 kW to the one above, which is how the tables are written.
+        if self.power_min_kw is not None and power_kw < self.power_min_kw:
+            return False
+        if self.power_max_kw is not None and power_kw >= self.power_max_kw:
+            return False
+        return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +157,13 @@ class Standard:
 
     def has_class(self, code: str | None) -> bool:
         return code is None or any(c.code == code for c in self.machine_classes)
+
+    def classify(self, power_kw: float | None, mounting: str | None = None) -> MachineClass | None:
+        """The class this standard would put a machine of that power in."""
+        for machine_class in self.machine_classes:
+            if machine_class.covers(power_kw, mounting):
+                return machine_class
+        return None
 
     def covers_technique(self, technique_code: str | None) -> bool:
         if not self.techniques:
@@ -184,6 +224,10 @@ class EvaluationContext:
     equipment_type: str | None = None
     asset_group_kind: str | None = None
     machine_class: str | None = None
+    # Nameplate power and mounting, so the machine class can be worked out
+    # rather than remembered.
+    rated_power_kw: float | None = None
+    mounting: str | None = None
     # The standard assigned to this equipment. Sets from any other standard are
     # out of play; custom sets (no standard) still compete.
     standard_code: str | None = None

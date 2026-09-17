@@ -5,7 +5,10 @@ from decimal import Decimal
 from modules.thresholds.domain.entities import (
     Aggregation,
     Band,
+    MachineClass as MachineClassVO,
+    Mounting,
     Scope,
+    Standard,
     Status,
     StatusKind,
     TechniqueStatusProfile,
@@ -52,6 +55,33 @@ class DjangoStatusProfileRepository:
                 for option in profile.options.all()
             ),
         )
+
+
+def standard_to_domain(row: models.ThresholdStandard) -> Standard:
+    return Standard(
+        code=row.code,
+        name=row.name,
+        source=row.source,
+        machine_classes=tuple(
+            MachineClassVO(
+                code=machine_class.code,
+                name=machine_class.name,
+                description=machine_class.description,
+                power_min_kw=(
+                    float(machine_class.power_min_kw)
+                    if machine_class.power_min_kw is not None else None
+                ),
+                power_max_kw=(
+                    float(machine_class.power_max_kw)
+                    if machine_class.power_max_kw is not None else None
+                ),
+                mounting=Mounting(machine_class.mounting or "any"),
+            )
+            for machine_class in row.machine_classes.all()
+        ),
+        techniques=tuple(technique.code for technique in row.techniques.all()),
+        is_builtin=row.is_builtin,
+    )
 
 
 def _status_to_domain(row: models.Status, display_name: str = "", language: str = "es") -> Status:
