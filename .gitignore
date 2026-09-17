@@ -8,5 +8,6 @@ __pycache__/
 htmlcov/
 .coverage
 data/*.sqlite3
+data/media/
 /media/
 /staticfiles/
