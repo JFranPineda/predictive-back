@@ -19,7 +19,10 @@ class PlantSummaryView(APIView):
         language = getattr(request, "language", "es")
         queryset = (
             Equipment.objects.for_company(request.company_id)
-            .select_related("asset_group__sector__area", "condition_status", "availability_status")
+            .select_related(
+                "asset_group__sector__area", "asset_group__kind",
+                "condition_status", "availability_status",
+            )
         )
         if request.query_params.get("plant"):
             queryset = queryset.filter(

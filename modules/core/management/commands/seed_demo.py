@@ -22,7 +22,17 @@ from django.db import transaction
 from django.utils import timezone
 
 from modules.assets.domain.asset_code import generate as generate_code
-from modules.assets.models import Area, AssetGroup, Equipment, MeasurementPoint, Plant, Sector
+from modules.assets.models import (
+    Area,
+    AssetGroup,
+    AssetGroupComponent,
+    AssetGroupKind,
+    Equipment,
+    MeasurementPoint,
+    Plant,
+    PointTemplate,
+    Sector,
+)
 from modules.core.models import Company, InstalledModule
 from modules.diagnostics.models import EquipmentLogEntry, FaultMode
 from modules.measurements.models import Instrument, Magnitude, Reading, Technique, Unit
@@ -174,7 +184,8 @@ class Command(BaseCommand):
         plant = Plant.objects.create(
             company=company, code="huachipa", name="Planta Huachipa", address="Lima, Perú"
         )
-        equipment = self._assets(company, plant, rgp, standards, statuses)
+        kinds = self._group_kinds(company)
+        equipment = self._assets(company, plant, rgp, standards, statuses, kinds)
         self._readings(company, equipment, magnitudes, units, statuses, instruments, users,
                        plant, options["rounds"], docs)
         self._diary(company, equipment, users)
@@ -360,7 +371,41 @@ class Command(BaseCommand):
 
     # ------------------------------------------------------------------- assets
 
-    def _assets(self, company, plant, rgp_path, standards, statuses) -> list[Equipment]:
+    def _group_kinds(self, company) -> dict:
+        """The train taxonomy and the point layout each one measures.
+
+        Straight from `MPd-AV-N°006-13-EB P-757`: motor on points 1 and 2,
+        driven machine on 3 and 4, three axes each, with envelope and
+        temperature read on the horizontal.
+        """
+        axes = {"H": ["vel_rms", "env_accel", "temp"], "V": ["vel_rms"], "A": ["vel_rms"]}
+        sides = {0: ("free_end", "coupling_end"), 1: ("coupling_end", "opposite_coupling")}
+        created = {}
+        for code, name, components in GROUP_KINDS:
+            kind = AssetGroupKind.objects.create(
+                company=company, code=code, name=name, is_builtin=True,
+                translations={"name": {"es": name}},
+            )
+            for index, (label, equipment_type, position) in enumerate(components):
+                component = AssetGroupComponent.objects.create(
+                    kind=kind, order=index, label=label,
+                    equipment_type=equipment_type, position=position,
+                )
+                first = 1 + index * 2
+                PointTemplate.objects.bulk_create([
+                    PointTemplate(
+                        kind=kind, component=component, number=first + offset, axis=axis,
+                        side=sides.get(index, ("custom", "custom"))[offset],
+                        magnitudes=magnitudes,
+                        order=(first + offset) * 10 + list(axes).index(axis),
+                    )
+                    for offset in (0, 1)
+                    for axis, magnitudes in axes.items()
+                ])
+            created[code] = kind
+        return created
+
+    def _assets(self, company, plant, rgp_path, standards, statuses, kinds) -> list[Equipment]:
         from modules.assets.infrastructure.importers.rgp_excel import read_rgp
 
         areas: dict[str, Area] = {}
@@ -398,7 +443,7 @@ class Command(BaseCommand):
                     company=company, sector=sector,
                     code=_unique(_slug(f"{row.area_code}-{row.group}")[:58], taken),
                     name=row.group or row.equipment_name,
-                    kind=_group_kind(row.group, row.equipment_type),
+                    kind=kinds[_group_kind(row.group, row.equipment_type)],
                 )
                 groups[group_key] = group
 
@@ -631,6 +676,21 @@ class Command(BaseCommand):
             if matched:
                 entry.fault_modes.set(matched)
 
+
+GROUP_KINDS = [
+    ("motor_pump", "Motor-Bomba", [("MOTOR", "motor", "driver"), ("BOMBA", "pump", "driven")]),
+    ("motor_compressor", "Motor-Compresor",
+     [("MOTOR", "motor", "driver"), ("COMPRESOR", "compressor", "driven")]),
+    ("motor_turbine", "Motor-Turbina",
+     [("MOTOR", "motor", "driver"), ("TURBINA", "turbine", "driven")]),
+    ("motor_gearbox", "Motor-Reductor",
+     [("MOTOR", "motor", "driver"), ("REDUCTOR", "gearbox", "driven")]),
+    ("motor_fan", "Motor-Ventilador",
+     [("MOTOR", "motor", "driver"), ("VENTILADOR", "fan", "driven")]),
+    ("motor_blower", "Motor-Soplador",
+     [("MOTOR", "motor", "driver"), ("SOPLADOR", "blower", "driven")]),
+    ("standalone", "Equipo aislado", [("EQUIPO", "other", "driver")]),
+]
 
 FAULT_MODES = [
     ("misalignment", "Desalineamiento", "Misalignment"),
