@@ -19,6 +19,8 @@ MANIFEST = Manifest(
     menu=(
         MenuItem(label="Usuarios", route="/settings/users", icon="users",
                  order=5, parent="settings", permission="security.view_user"),
+        MenuItem(label="Permisos", route="/settings/roles", icon="shield",
+                 order=6, parent="settings", permission="security.manage_role"),
     ),
     fixtures=("default_roles.yaml",),
 )

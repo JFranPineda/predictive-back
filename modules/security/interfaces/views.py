@@ -157,12 +157,75 @@ class UserDetailView(APIView):
             membership.user.is_active = bool(request.data["is_active"])
             membership.user.save(update_fields=["is_active"])
 
+        profile = {}
+        for field in ("first_name", "last_name", "initials"):
+            if field in request.data:
+                profile[field] = (request.data.get(field) or "").strip()
+        if profile:
+            for field, value in profile.items():
+                setattr(membership.user, field, value)
+            membership.user.save(update_fields=list(profile))
+
+        if "password" in request.data:
+            password = request.data["password"] or ""
+            if len(password) < 10:
+                return Response(
+                    {"type": "weak_password",
+                     "title": "La contraseña necesita 10 caracteres o más", "status": 400},
+                    status=400,
+                )
+            membership.user.set_password(password)
+            membership.user.save(update_fields=["password"])
+
+        if "area_restrictions" in request.data:
+            _set_area_scope(membership, request.data["area_restrictions"])
+
         return Response({
             "id": membership.user_id,
+            "full_name": membership.user.get_full_name(),
+            "initials": membership.user.initials,
             "role": membership.role.code,
             "role_name": membership.role.name,
             "is_active": membership.user.is_active,
+            "area_restrictions": [
+                ref for restriction in membership.restrictions.all() for ref in restriction.refs
+            ],
         })
+
+    def delete(self, request, user_id: int):
+        """Removes access to this company, not the person.
+
+        Their name stays on every reading and conclusion they wrote; deleting
+        the user would take the authorship of past reports with it.
+        """
+        from rest_framework.exceptions import PermissionDenied
+
+        from modules.security.application.access import build_actor
+
+        actor = build_actor(request.user, request.company_id)
+        if not actor.has("security.manage_user"):
+            raise PermissionDenied("No puedes administrar usuarios")
+        if user_id == request.user.id:
+            raise PermissionDenied("No puedes quitarte a ti mismo el acceso")
+
+        membership = Membership.objects.filter(
+            company_id=request.company_id, user_id=user_id
+        ).first()
+        if membership is None:
+            return Response({"type": "not_found", "status": 404}, status=404)
+        membership.delete()
+        return Response(status=204)
+
+
+def _set_area_scope(membership, refs) -> None:
+    """An empty list means every area; a populated one narrows the user to
+    exactly those. The distinction matters: `[]` must not read as "nothing"."""
+    from modules.security.infrastructure.models import ScopeRestriction
+
+    membership.restrictions.filter(scope="area").delete()
+    cleaned = [int(ref) for ref in (refs or []) if str(ref).isdigit()]
+    if cleaned:
+        ScopeRestriction.objects.create(membership=membership, scope="area", refs=cleaned)
 
 
 class MyLanguageView(APIView):
