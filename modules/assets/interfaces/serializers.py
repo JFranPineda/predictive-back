@@ -56,7 +56,15 @@ class EquipmentSerializer(serializers.ModelSerializer):
         return {"id": area.id, "code": area.code, "name": area.name}
 
     def get_asset_group(self, obj):
-        return {"id": obj.asset_group_id, "name": obj.asset_group.name, "kind": obj.asset_group.kind}
+        # `kind` became a catalogue row; sending the instance made the whole
+        # equipment listing return 500.
+        kind = obj.asset_group.kind
+        return {
+            "id": obj.asset_group_id,
+            "name": obj.asset_group.name,
+            "kind": kind.code if kind else None,
+            "kind_name": kind.name if kind else "",
+        }
 
     def get_condition_status(self, obj):
         return StatusField(context=self.context).to_representation(obj.condition_status)

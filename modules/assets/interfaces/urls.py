@@ -14,6 +14,11 @@ from modules.assets.interfaces.admin_views import (
     SectorCollectionView,
     SectorDetailView,
 )
+from modules.assets.interfaces.kind_views import (
+    GroupPointsView,
+    KindCollectionView,
+    KindDetailView,
+)
 from modules.assets.interfaces.views import AreaViewSet, EquipmentViewSet
 
 router = DefaultRouter()
@@ -30,6 +35,9 @@ urlpatterns = [
     path("asset-groups/<int:group_id>/", AssetGroupDetailView.as_view(), name="asset-group-detail"),
     path("equipments/new/", EquipmentCollectionView.as_view(), name="equipment-create"),
     path("equipments/<int:equipment_id>/edit/", EquipmentDetailView.as_view(), name="equipment-edit"),
+    path("asset-group-kinds/", KindCollectionView.as_view(), name="group-kinds"),
+    path("asset-group-kinds/<int:kind_id>/", KindDetailView.as_view(), name="group-kind-detail"),
+    path("asset-groups/<int:group_id>/points/", GroupPointsView.as_view(), name="group-points"),
     path("points/", PointCollectionView.as_view(), name="point-create"),
     path("points/<int:point_id>/", PointDetailView.as_view(), name="point-detail"),
     *router.urls,

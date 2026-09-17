@@ -53,7 +53,8 @@ class EquipmentViewSet(TenantViewSet):
         queryset = (
             Equipment.objects.for_company(self.request.company_id)
             .select_related(
-                "asset_group__sector__area", "condition_status", "availability_status"
+                "asset_group__sector__area", "asset_group__kind",
+                "condition_status", "availability_status",
             )
             .order_by("asset_group__sector__area__code", "client_tag", "asset_code")
         )

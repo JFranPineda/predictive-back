@@ -15,7 +15,15 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.assets.domain.asset_code import generate as generate_code
-from modules.assets.models import Area, AssetGroup, Equipment, MeasurementPoint, Plant, Sector
+from modules.assets.models import (
+    Area,
+    AssetGroup,
+    AssetGroupKind,
+    Equipment,
+    MeasurementPoint,
+    Plant,
+    Sector,
+)
 from modules.security.application.access import build_actor
 
 
@@ -149,15 +157,22 @@ class AssetGroupCollectionView(AssetAdminView):
     def get(self, request):
         queryset = (
             self.scoped(AssetGroup, request)
-            .select_related("sector__area")
+            .select_related("sector__area", "kind")
             .order_by("sector__area__code", "name")
         )
         if request.query_params.get("sector"):
             queryset = queryset.filter(sector_id=request.query_params["sector"])
         return Response([
-            {"id": row.id, "code": row.code, "name": row.name, "kind": row.kind,
-             "sector": row.sector.name, "area_code": row.sector.area.code,
-             "equipment_count": row.equipments.count()}
+            {"id": row.id, "code": row.code, "name": row.name,
+             "kind": row.kind.code if row.kind else None,
+             "kind_id": row.kind_id,
+             "kind_name": row.kind.name if row.kind else "",
+             "sector": row.sector.name, "sector_id": row.sector_id,
+             "area_code": row.sector.area.code,
+             "equipment_count": row.equipments.count(),
+             "point_count": MeasurementPoint.objects.filter(
+                 equipment__asset_group=row
+             ).count()}
             for row in queryset[:500]
         ])
 
@@ -174,25 +189,38 @@ class AssetGroupCollectionView(AssetAdminView):
             self.scoped(AssetGroup, request),
             _slug(request.data.get("code") or f"{sector.area.code}-{name}")[:58],
         )
+        kind = (
+            AssetGroupKind.objects.for_company(request.company_id)
+            .filter(id=request.data.get("kind"))
+            .first()
+        )
         group = AssetGroup.objects.create(
-            company_id=request.company_id, sector=sector, code=code, name=name,
-            kind=request.data.get("kind") or "standalone",
+            company_id=request.company_id, sector=sector, code=code, name=name, kind=kind,
             criticality=int(request.data.get("criticality") or 3),
         )
-        return Response({"id": group.id, "code": group.code, "name": group.name}, status=201)
+        return Response(
+            {"id": group.id, "code": group.code, "name": group.name,
+             "kind_id": group.kind_id},
+            status=201,
+        )
 
 
 class AssetGroupDetailView(AssetAdminView):
     def patch(self, request, group_id: int):
         self.require(request)
         group = _get(self.scoped(AssetGroup, request), group_id, "conjunto")
-        for field in ("name", "kind"):
-            if field in request.data:
-                setattr(group, field, (request.data.get(field) or "").strip())
+        if "name" in request.data:
+            group.name = (request.data.get("name") or "").strip()
+        if "kind" in request.data:
+            group.kind = (
+                AssetGroupKind.objects.for_company(request.company_id)
+                .filter(id=request.data["kind"])
+                .first()
+            )
         if "criticality" in request.data:
             group.criticality = int(request.data["criticality"])
         group.save()
-        return Response({"id": group.id, "name": group.name, "kind": group.kind})
+        return Response({"id": group.id, "name": group.name, "kind_id": group.kind_id})
 
     def delete(self, request, group_id: int):
         self.require(request)
