@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from django.db import models
 
-from modules.core.infrastructure.models import TenantModel
+from modules.core.infrastructure.models import TenantModel, TranslatableModel
 
 MONITORING_FREQUENCIES = [
     ("monthly", "Mensual"),
@@ -58,23 +58,84 @@ class Sector(TenantModel):
         ordering = ["name"]
 
 
+class AssetGroupKind(TenantModel, TranslatableModel):
+    """A kind of machine train, configurable by the customer.
+
+    Motor+Bomba and Motor+Turbina are not two rows of an enum in our code:
+    they are the customer's own taxonomy, and every plant has combinations we
+    have not thought of. Each kind carries the point layout its reports use.
+    """
+
+    code = models.SlugField(max_length=40)
+    name = models.CharField(max_length=120)
+    description = models.CharField(max_length=240, blank=True)
+    is_builtin = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        unique_together = [("company", "code")]
+        ordering = ["name"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class AssetGroupComponent(models.Model):
+    """One machine inside the train: the motor, the pump it drives."""
+
+    kind = models.ForeignKey(AssetGroupKind, on_delete=models.CASCADE, related_name="components")
+    order = models.PositiveSmallIntegerField(default=0)
+    label = models.CharField(max_length=60, help_text='As the report prints it: "MOTOR", "BOMBA"')
+    equipment_type = models.CharField(max_length=30, default="motor")
+    position = models.CharField(max_length=20, default="driver")
+
+    class Meta:
+        ordering = ["order"]
+
+    def __str__(self) -> str:
+        return f"{self.kind.code}/{self.label}"
+
+
+class PointTemplate(models.Model):
+    """The measuring layout of a kind, one row per point and axis.
+
+    Reproduces the customer's own report: points 1 and 2 on the motor (free
+    end, coupling end), 3 and 4 on the driven machine (coupling end, opposite
+    end), each measured on H, V and A. `magnitudes` says what is read there —
+    velocity on the three axes, envelope and temperature usually on H only.
+    """
+
+    kind = models.ForeignKey(AssetGroupKind, on_delete=models.CASCADE, related_name="point_templates")
+    component = models.ForeignKey(
+        AssetGroupComponent, on_delete=models.CASCADE, related_name="point_templates",
+        null=True, blank=True,
+    )
+    number = models.PositiveSmallIntegerField()
+    axis = models.CharField(max_length=1, default="H")
+    side = models.CharField(max_length=20, default="custom")
+    point_type = models.CharField(max_length=20, default="bearing")
+    magnitudes = models.JSONField(default=list, blank=True)
+    order = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        unique_together = [("kind", "number", "axis")]
+        ordering = ["number", "axis"]
+
+    @property
+    def label(self) -> str:
+        return f"{self.number}{self.axis if self.axis != 'N' else ''}"
+
+
 class AssetGroup(TenantModel):
     """The rotating set (motor+pump, motor+compressor...). This is what gets
     aligned, what gets one report, and what the point numbering belongs to."""
 
-    KINDS = [
-        ("motor_pump", "Motor-Bomba"),
-        ("motor_compressor", "Motor-Compresor"),
-        ("motor_gearbox", "Motor-Reductor"),
-        ("motor_fan", "Motor-Ventilador"),
-        ("motor_blower", "Motor-Soplador"),
-        ("standalone", "Equipo aislado"),
-    ]
-
     sector = models.ForeignKey(Sector, on_delete=models.CASCADE, related_name="groups")
     code = models.SlugField(max_length=60)
     name = models.CharField(max_length=200)
-    kind = models.CharField(max_length=30, choices=KINDS, default="standalone")
+    kind = models.ForeignKey(
+        AssetGroupKind, on_delete=models.PROTECT, related_name="groups", null=True, blank=True
+    )
     criticality = models.PositiveSmallIntegerField(default=3)
     is_active = models.BooleanField(default=True)
 
