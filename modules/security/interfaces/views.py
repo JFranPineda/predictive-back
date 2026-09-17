@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from modules.security.models import Membership
+
+
+class UserListView(APIView):
+    """Who has access, with what role and over which areas.
+
+    External inspectors are flagged: the difference between staff and a
+    contractor is the first thing an administrator needs to see.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        memberships = (
+            Membership.objects.filter(company_id=request.company_id)
+            .select_related("user", "role")
+            .prefetch_related("restrictions")
+            .order_by("user__first_name", "user__last_name")
+        )
+        return Response([
+            {
+                "id": membership.user_id,
+                "email": membership.user.email,
+                "full_name": membership.user.get_full_name(),
+                "initials": membership.user.initials,
+                "role": membership.role.code,
+                "role_name": membership.role.name,
+                "is_external": membership.user.is_external,
+                "is_active": membership.user.is_active,
+                "language": membership.user.language or "",
+                "area_restrictions": [
+                    ref for restriction in membership.restrictions.all()
+                    for ref in restriction.refs
+                ],
+            }
+            for membership in memberships
+        ])
+
+
+class UserDetailView(APIView):
+    """Role and activation. Everything else about a person — their name, their
+    password — is theirs to change, not an administrator's."""
+
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, user_id: int):
+        from rest_framework.exceptions import PermissionDenied
+
+        from modules.security.application.access import build_actor
+        from modules.security.domain.actor import Role
+        from modules.security.infrastructure.models import Role as RoleModel
+
+        actor = build_actor(request.user, request.company_id)
+        if not actor.has("security.manage_user"):
+            raise PermissionDenied("No puedes administrar usuarios")
+
+        membership = (
+            Membership.objects.filter(company_id=request.company_id, user_id=user_id)
+            .select_related("user", "role")
+            .first()
+        )
+        if membership is None:
+            return Response({"type": "not_found", "status": 404}, status=404)
+
+        role_code = request.data.get("role")
+        if role_code:
+            if role_code not in {role.value for role in Role}:
+                return Response({"type": "unknown_role", "status": 400}, status=400)
+            # Locking yourself out of your own company is the classic footgun.
+            if membership.user_id == request.user.id and role_code != membership.role.code:
+                raise PermissionDenied("No puedes cambiar tu propio rol")
+            role = RoleModel.objects.filter(company_id=request.company_id, code=role_code).first()
+            if role is None:
+                return Response({"type": "unknown_role", "status": 400}, status=400)
+            membership.role = role
+            membership.save(update_fields=["role"])
+
+        if "is_active" in request.data:
+            if membership.user_id == request.user.id:
+                raise PermissionDenied("No puedes desactivarte a ti mismo")
+            membership.user.is_active = bool(request.data["is_active"])
+            membership.user.save(update_fields=["is_active"])
+
+        return Response({
+            "id": membership.user_id,
+            "role": membership.role.code,
+            "role_name": membership.role.name,
+            "is_active": membership.user.is_active,
+        })
+
+
+class MyLanguageView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def put(self, request):
+        from modules.core.domain.i18n import normalise_language
+
+        language = normalise_language(request.data.get("language"))
+        if language is None:
+            return Response({"type": "unsupported_language", "status": 400}, status=400)
+        request.user.language = language
+        request.user.save(update_fields=["language"])
+        return Response({"language": language})
