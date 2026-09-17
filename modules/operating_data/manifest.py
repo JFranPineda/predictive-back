@@ -7,7 +7,7 @@ MANIFEST = Manifest(
     summary="Parámetros del equipo en operación: rpm, presiones, corriente, horas, lubricación y alineamiento",
     category="Análisis predictivo",
     depends=('core', 'assets', 'measurements', 'services'),
-    auto_install=False,
+    auto_install=True,
     permissions=(
         ("operating_data.view", "Ver datos operativos"),
         ("operating_data.add", "Registrar datos operativos"),
