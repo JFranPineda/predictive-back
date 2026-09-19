@@ -31,8 +31,10 @@ class ParameterListView(APIView):
             queryset = queryset.filter(technique_code__in=["", technique])
         return Response([
             {
+                "id": row.id,
                 "code": row.code,
                 "name": row.translated("name", language),
+                "technique_code": row.technique_code,
                 "unit_code": row.unit_code,
                 "decimals": row.decimals,
                 "is_cumulative": row.is_cumulative,
@@ -60,6 +62,76 @@ class ParameterListView(APIView):
             translations={"name": {"es": name}},
         )
         return Response({"code": parameter.code, "name": parameter.name}, status=201)
+
+
+class ParameterDetailView(APIView):
+    """Correcting a parameter, and retiring one that is no longer taken.
+
+    `is_cumulative` is the one that matters: a running-hour counter that only
+    grows is read differently from a pressure, and a parameter created with
+    the flag wrong reports nonsense trends until somebody can fix it.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, parameter_id: int):
+        parameter = _parameter(request, parameter_id)
+        _may_manage(request)
+        name = (request.data.get("name") or "").strip()
+        if name:
+            parameter.name = name
+            parameter.translations = {
+                **parameter.translations,
+                "name": {**(parameter.translations.get("name") or {}), "es": name},
+            }
+        for field in ("unit_code", "technique_code"):
+            if field in request.data:
+                setattr(parameter, field, (request.data.get(field) or "").strip())
+        if "decimals" in request.data:
+            parameter.decimals = max(int(request.data["decimals"] or 0), 0)
+        if "is_cumulative" in request.data:
+            parameter.is_cumulative = bool(request.data["is_cumulative"])
+        if "is_active" in request.data:
+            parameter.is_active = bool(request.data["is_active"])
+        parameter.save()
+        language = getattr(request, "language", "es")
+        return Response({
+            "id": parameter.id, "code": parameter.code,
+            "name": parameter.translated("name", language),
+            "unit_code": parameter.unit_code, "technique_code": parameter.technique_code,
+            "decimals": parameter.decimals, "is_cumulative": parameter.is_cumulative,
+            "is_active": parameter.is_active,
+        })
+
+    def delete(self, request, parameter_id: int):
+        parameter = _parameter(request, parameter_id)
+        _may_manage(request)
+        from modules.operating_data.models import OperatingReading
+
+        used = OperatingReading.objects.filter(parameter=parameter).count()
+        if used:
+            # The values already recorded are what a trend is drawn from.
+            parameter.is_active = False
+            parameter.save(update_fields=["is_active"])
+            return Response({"id": parameter.id, "is_active": False, "deactivated": True,
+                             "reason": f"tiene {used} valor(es) registrados"})
+        parameter.delete()
+        return Response(status=204)
+
+
+def _parameter(request, parameter_id: int):
+    row = OperatingParameter.objects.for_company(request.company_id).filter(
+        id=parameter_id
+    ).first()
+    if row is None:
+        raise ValidationError("Ese parámetro no existe")
+    return row
+
+
+def _may_manage(request) -> None:
+    actor = build_actor(request.user, request.company_id)
+    if not actor.has("operating_data.add"):
+        raise PermissionDenied("Falta el permiso operating_data.add")
 
 
 class VisitOperatingView(APIView):

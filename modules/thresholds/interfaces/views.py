@@ -4,7 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from modules.thresholds.models import Status, ThresholdSet, ThresholdStandard
+from modules.thresholds.models import Status, ThresholdBand, ThresholdSet, ThresholdStandard
 
 
 class StatusListView(APIView):
@@ -64,15 +64,61 @@ class StatusDetailView(APIView):
             row.translations = {**row.translations, "name": stored}
             row.name = stored.get("es") or row.name
 
-        row.save(update_fields=["color", "name", "translations", "updated_at"])
+        fields = ["color", "name", "translations", "updated_at"]
+
+        # Severity is what "gana el peor" compares, and the flags are what the
+        # traffic light and the coverage KPI read. A plant that adds CRÍTICO
+        # above PARADA has to be able to say where it sits and what it means.
+        if "severity" in request.data:
+            row.severity = max(int(request.data["severity"] or 0), 0)
+            fields.append("severity")
+        for flag in ("requires_action", "is_terminal", "measurable"):
+            if flag in request.data:
+                setattr(row, flag, bool(request.data[flag]))
+                fields.append(flag)
+
+        row.save(update_fields=sorted(set(fields)))
         language = getattr(request, "language", "es")
-        return Response({
-            "id": row.id, "code": row.code, "name": row.translated("name", language),
-            "kind": row.kind, "severity": row.severity, "color": row.color,
-            "measurable": row.measurable, "requires_action": row.requires_action,
-            "is_terminal": row.is_terminal,
-            "names": row.translations.get("name") or {},
-        })
+        return Response(_status_payload(row, language))
+
+    def delete(self, request, status_id: int):
+        """A status that has already judged a reading is never destroyed.
+
+        The readings froze it on purpose: removing the row would rewrite what
+        the plant was told in 2014.
+        """
+        from rest_framework.exceptions import PermissionDenied, ValidationError
+
+        from modules.measurements.models import Reading
+        from modules.security.application.access import build_actor
+
+        actor = build_actor(request.user, request.company_id)
+        if not actor.has("thresholds.manage_status"):
+            raise PermissionDenied("No puedes administrar estados")
+
+        row = Status.objects.for_company(request.company_id).filter(id=status_id).first()
+        if row is None:
+            return Response({"type": "not_found", "status": 404}, status=404)
+
+        readings = Reading.objects.filter(condition_status=row).count()
+        # The band's FK is `related_name="+"`, so it has to be asked directly.
+        bands = ThresholdBand.objects.filter(status=row).count()
+        if readings or bands:
+            raise ValidationError(
+                f"No se puede borrar: lo usan {readings} lectura(s) y {bands} banda(s)"
+            )
+        row.delete()
+        return Response(status=204)
+
+
+def _status_payload(row, language: str) -> dict:
+    return {
+        "id": row.id, "code": row.code, "name": row.translated("name", language),
+        "kind": row.kind, "severity": row.severity, "color": row.color,
+        "measurable": row.measurable, "requires_action": row.requires_action,
+        "is_terminal": row.is_terminal,
+        "names": row.translations.get("name") or {},
+    }
 
 
 def _is_hex(value: str) -> bool:

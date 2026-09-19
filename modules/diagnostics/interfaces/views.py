@@ -55,6 +55,67 @@ class FaultModeListView(APIView):
         return Response({"id": fault.id, "code": fault.code, "name": fault.name}, status=201)
 
 
+class FaultModeDetailView(APIView):
+    """The catalogue is the customer's, so it has to be correctable.
+
+    A fault mode a visit already reported is deactivated, never destroyed:
+    deleting it would take the finding out of a report that was signed.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, fault_id: int):
+        fault = _fault(request, fault_id)
+        _may_manage(request)
+        name = (request.data.get("name") or "").strip()
+        if name:
+            fault.name = name
+            fault.translations = {
+                **fault.translations,
+                "name": {**(fault.translations.get("name") or {}), "es": name},
+            }
+        if "technique_code" in request.data:
+            fault.technique_code = (request.data.get("technique_code") or "").strip()
+        if "signature" in request.data:
+            fault.typical_signature = (request.data.get("signature") or "").strip()
+        if "reference" in request.data:
+            fault.iso_reference = (request.data.get("reference") or "").strip()
+        if "is_active" in request.data:
+            fault.is_active = bool(request.data["is_active"])
+        fault.save()
+        language = getattr(request, "language", "es")
+        return Response({
+            "id": fault.id, "code": fault.code, "name": fault.translated("name", language),
+            "technique_code": fault.technique_code, "signature": fault.typical_signature,
+            "reference": fault.iso_reference, "is_active": fault.is_active,
+        })
+
+    def delete(self, request, fault_id: int):
+        fault = _fault(request, fault_id)
+        _may_manage(request)
+        used = fault.visits.count()
+        if used:
+            fault.is_active = False
+            fault.save(update_fields=["is_active"])
+            return Response({"id": fault.id, "is_active": False, "deactivated": True,
+                             "reason": f"lo reportan {used} visita(s)"})
+        fault.delete()
+        return Response(status=204)
+
+
+def _fault(request, fault_id: int):
+    row = FaultMode.objects.for_company(request.company_id).filter(id=fault_id).first()
+    if row is None:
+        raise ValidationError("Ese modo de falla no existe")
+    return row
+
+
+def _may_manage(request) -> None:
+    actor = build_actor(request.user, request.company_id)
+    if not actor.has("diagnostics.close_recommendation"):
+        raise PermissionDenied("Falta el permiso para gestionar el catálogo")
+
+
 class VisitFaultsView(APIView):
     """What this service found. Optional, and one or several."""
 
