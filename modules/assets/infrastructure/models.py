@@ -88,6 +88,9 @@ class AssetGroupComponent(models.Model):
     label = models.CharField(max_length=60, help_text='As the report prints it: "MOTOR", "BOMBA"')
     equipment_type = models.CharField(max_length=30, default="motor")
     position = models.CharField(max_length=20, default="driver")
+    # Machines of one train are not read on the same number of points: the
+    # real reports show MOTOR 2 + REDUCTOR 4, and a gearbox of 5.
+    point_count = models.PositiveSmallIntegerField(default=2)
 
     class Meta:
         ordering = ["order"]
@@ -164,6 +167,14 @@ class Equipment(TenantModel):
     name = models.CharField(max_length=200)
     equipment_type = models.CharField(max_length=30, choices=TYPES)
     position_in_group = models.CharField(max_length=20, choices=POSITIONS, default="driven")
+    # Which slot of the train this machine fills, and in which order it is
+    # printed. `position_in_group` cannot say it: report 0023 carries three
+    # driven machines and two of them are the same kind of bearing housing.
+    group_component = models.ForeignKey(
+        AssetGroupComponent, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="equipments",
+    )
+    order_in_group = models.PositiveSmallIntegerField(default=0)
     # Which standard judges this equipment, and under which of its classes.
     # Changing the standard changes the limits and therefore the status,
     # without touching a single threshold row.
@@ -216,12 +227,17 @@ class Equipment(TenantModel):
 class MeasurementPoint(TenantModel):
     """Numbering is positional inside the AssetGroup, as in the source sheets:
     1 = motor free end, 2 = motor coupling end, 3 = pump coupling end,
-    4 = pump opposite coupling."""
+    4 = pump opposite coupling. It runs on across the whole train, so the
+    gearbox of report 0023 owns 3 to 6 and the bearing housings 7 to 10."""
 
     SIDES = [
         ("free_end", "Lado libre"), ("coupling_end", "Lado acople"),
         ("opposite_coupling", "Lado opuesto a acople"), ("inboard", "Interior"),
-        ("outboard", "Exterior"), ("custom", "Otro"),
+        ("outboard", "Exterior"),
+        # A bearing housing is read twice on the same casing, one above the
+        # other: the sheet prints "7 INFERIOR" and "8 SUPERIOR".
+        ("lower", "Inferior"), ("upper", "Superior"),
+        ("custom", "Otro"),
     ]
     AXES = [("H", "Horizontal"), ("V", "Vertical"), ("A", "Axial"), ("N", "Sin eje")]
     TYPES = [

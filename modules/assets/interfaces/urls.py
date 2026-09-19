@@ -9,6 +9,7 @@ from modules.assets.interfaces.admin_views import (
     EquipmentCollectionView,
     EquipmentDetailView,
     PlantCollectionView,
+    PlantDetailView,
     PointCollectionView,
     PointDetailView,
     SectorCollectionView,
@@ -27,6 +28,7 @@ router.register("equipments", EquipmentViewSet, basename="equipment")
 
 urlpatterns = [
     path("plants/", PlantCollectionView.as_view(), name="plants"),
+    path("plants/<int:plant_id>/", PlantDetailView.as_view(), name="plant-detail"),
     path("areas/new/", AreaCollectionView.as_view(), name="area-create"),
     path("areas/<int:area_id>/edit/", AreaDetailView.as_view(), name="area-detail"),
     path("sectors/", SectorCollectionView.as_view(), name="sector-create"),

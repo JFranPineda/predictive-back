@@ -15,6 +15,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from modules.assets.domain.point_layout import ComponentSpec, plan_layout
 from modules.assets.models import (
     AssetGroup,
     AssetGroupComponent,
@@ -25,7 +26,10 @@ from modules.assets.models import (
 from modules.security.application.access import build_actor
 
 AXES = ("H", "V", "A", "N")
-SIDES = ("free_end", "coupling_end", "opposite_coupling", "inboard", "outboard", "custom")
+SIDES = (
+    "free_end", "coupling_end", "opposite_coupling", "inboard", "outboard",
+    "lower", "upper", "custom",
+)
 
 
 class KindView(APIView):
@@ -121,8 +125,15 @@ class GroupPointsView(KindView):
                       "kind": group.kind.code if group.kind else None},
             "equipments": [
                 {"id": item.id, "name": item.name, "tag": item.client_tag or item.asset_code,
-                 "type": item.equipment_type, "position": item.position_in_group}
-                for item in group.equipments.order_by("position_in_group", "id")
+                 "type": item.equipment_type, "position": item.position_in_group,
+                 "order": item.order_in_group,
+                 "component_id": item.group_component_id,
+                 "component_label": (
+                     item.group_component.label if item.group_component else ""
+                 )}
+                for item in group.equipments.select_related("group_component").order_by(
+                    "order_in_group", "id"
+                )
             ],
             "points": [
                 {
@@ -151,34 +162,28 @@ class GroupPointsView(KindView):
         if not templates:
             raise ValidationError("El tipo no tiene plantilla de puntos configurada")
 
-        equipments = list(group.equipments.all())
+        equipments = list(group.equipments.order_by("order_in_group", "id"))
         if not equipments:
             raise ValidationError("El conjunto no tiene equipos todavía")
 
-        # Points 1-2 belong to the first machine of the train, 3-4 to the
-        # second, exactly as the report numbers them. Match each component to
-        # the equipment that plays its part — by position first, then by type.
-        # Ordering equipment alphabetically put "driven" before "driver" and
-        # numbered the pump as if it were the motor.
-        by_component = {}
-        available = list(equipments)
-        for index, component in enumerate(group.kind.components.all()):
-            match = next(
-                (e for e in available if e.position_in_group == component.position),
-                None,
-            ) or next(
-                (e for e in available if e.equipment_type == component.equipment_type),
-                None,
-            )
-            if match is None:
-                match = available[0] if available else equipments[min(index, len(equipments) - 1)]
-            by_component[component.id] = match
-            if match in available and len(available) > 1:
-                available.remove(match)
+        # Each component of the kind is filled by one machine, and the link
+        # is kept: matching by position and type alone cannot tell the two
+        # bearing housings of report 0023 apart, so one of them ended up with
+        # the other's points.
+        by_component = _match_components(group, equipments)
 
         created = 0
         for template in templates:
-            equipment = by_component.get(template.component_id, equipments[0])
+            # A row with no component belongs to the whole train, as the
+            # older kinds wrote it; one whose machine does not exist is left
+            # for the day it does.
+            equipment = (
+                by_component.get(template.component_id)
+                if template.component_id
+                else equipments[0]
+            )
+            if equipment is None:
+                continue
             _, made = MeasurementPoint.objects.get_or_create(
                 equipment=equipment, number=template.number, axis=template.axis,
                 defaults={
@@ -189,6 +194,34 @@ class GroupPointsView(KindView):
             )
             created += int(made)
         return Response({"created": created, "total": len(templates)})
+
+
+def _match_components(group: AssetGroup, equipments: list) -> dict:
+    """Binds every machine of the train to the slot of the kind it fills.
+
+    A component nobody fills is left alone. A train whose bearing housings
+    have not been created yet is half a train, not a reason to pile points
+    7 to 10 onto the gearbox.
+    """
+
+    available = list(equipments)
+    matched: dict[int, object] = {}
+    for component in group.kind.components.all():
+        match = (
+            next((e for e in available if e.group_component_id == component.id), None)
+            or next((e for e in available if e.equipment_type == component.equipment_type), None)
+            or next((e for e in available if e.position_in_group == component.position), None)
+            or (available[0] if available else None)
+        )
+        if match is None:
+            continue
+        matched[component.id] = match
+        available.remove(match)
+        if match.group_component_id != component.id or match.order_in_group != component.order:
+            match.group_component_id = component.id
+            match.order_in_group = component.order
+            match.save(update_fields=["group_component", "order_in_group"])
+    return matched
 
 
 def _payload(kind: AssetGroupKind, language: str) -> dict:
@@ -202,7 +235,7 @@ def _payload(kind: AssetGroupKind, language: str) -> dict:
         "group_count": kind.groups.count(),
         "components": [
             {"id": c.id, "label": c.label, "equipment_type": c.equipment_type,
-             "position": c.position, "order": c.order}
+             "position": c.position, "order": c.order, "point_count": c.point_count}
             for c in kind.components.all()
         ],
         "point_templates": [
@@ -229,6 +262,7 @@ def _replace_components(kind: AssetGroupKind, rows) -> None:
                 "order": index,
                 "equipment_type": row.get("equipment_type") or "motor",
                 "position": row.get("position") or ("driver" if index == 0 else "driven"),
+                "point_count": max(int(row.get("point_count") or 2), 1),
             },
         )
         kept.append(component.id)
@@ -269,22 +303,30 @@ def _replace_templates(kind: AssetGroupKind, rows) -> None:
 
 
 def _default_templates(kind: AssetGroupKind) -> None:
-    axes_magnitudes = {"H": ["vel_rms", "env_accel", "temp"], "V": ["vel_rms"], "A": ["vel_rms"]}
-    sides = {0: ("free_end", "coupling_end"), 1: ("coupling_end", "opposite_coupling")}
-    rows = []
-    for index, component in enumerate(kind.components.all()):
-        first = 1 + index * 2
-        for offset in (0, 1):
-            for axis, magnitudes in axes_magnitudes.items():
-                rows.append(
-                    PointTemplate(
-                        kind=kind, component=component, number=first + offset, axis=axis,
-                        side=sides.get(index, ("custom", "custom"))[offset],
-                        magnitudes=magnitudes,
-                        order=(first + offset) * 10 + list(axes_magnitudes).index(axis),
-                    )
-                )
-    PointTemplate.objects.bulk_create(rows)
+    """The layout a kind gets when nobody edits it row by row.
+
+    Each component contributes as many points as it declares, numbered in one
+    run across the train — which is how every report in the source set does
+    it, from MOTOR 2 + REDUCTOR 4 to CHUMACERA 1 + REDUCTOR 5.
+    """
+
+    rows = plan_layout([
+        ComponentSpec(
+            label=component.label,
+            point_count=component.point_count,
+            position=component.position,
+            equipment_type=component.equipment_type,
+        )
+        for component in kind.components.all()
+    ])
+    components = {component.label: component for component in kind.components.all()}
+    PointTemplate.objects.bulk_create([
+        PointTemplate(
+            kind=kind, component=components.get(row.component_label), number=row.number,
+            axis=row.axis, side=row.side, magnitudes=row.magnitudes, order=row.order,
+        )
+        for row in rows
+    ])
 
 
 def _get(queryset, pk: int):

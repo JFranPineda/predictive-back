@@ -15,6 +15,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.assets.domain.asset_code import generate as generate_code
+from modules.assets.domain.point_layout import ComponentSpec, next_number, plan_layout
 from modules.assets.models import (
     Area,
     AssetGroup,
@@ -79,6 +80,27 @@ class PlantCollectionView(AssetAdminView):
             timezone=request.data.get("timezone") or "America/Lima",
         )
         return Response({"id": plant.id, "code": plant.code, "name": plant.name}, status=201)
+
+
+class PlantDetailView(AssetAdminView):
+    def patch(self, request, plant_id: int):
+        self.require(request)
+        plant = _get(self.scoped(Plant, request), plant_id, "planta")
+        for field in ("name", "address", "timezone"):
+            if field in request.data:
+                setattr(plant, field, (request.data.get(field) or "").strip())
+        if "is_active" in request.data:
+            plant.is_active = bool(request.data["is_active"])
+        plant.save()
+        return Response({
+            "id": plant.id, "code": plant.code, "name": plant.name,
+            "address": plant.address, "is_active": plant.is_active,
+        })
+
+    def delete(self, request, plant_id: int):
+        self.require(request)
+        plant = _get(self.scoped(Plant, request), plant_id, "planta")
+        return _soft_delete(plant, plant.areas.count(), "áreas")
 
 
 class AreaCollectionView(AssetAdminView):
@@ -242,6 +264,7 @@ class EquipmentCollectionView(AssetAdminView):
         _check_licence(request, "equipment", self.scoped(Equipment, request).count())
 
         taken = set(self.scoped(Equipment, request).values_list("asset_code", flat=True))
+        component = _component_for(group, request.data.get("group_component"), equipment_type)
         equipment = Equipment.objects.create(
             company_id=request.company_id,
             asset_group=group,
@@ -254,7 +277,14 @@ class EquipmentCollectionView(AssetAdminView):
             client_tag=(request.data.get("client_tag") or "").strip(),
             name=name,
             equipment_type=equipment_type,
-            position_in_group=request.data.get("position_in_group") or "driven",
+            position_in_group=(
+                request.data.get("position_in_group")
+                or (component.position if component else "driven")
+            ),
+            group_component=component,
+            order_in_group=(
+                component.order if component else group.equipments.count()
+            ),
             monitoring_frequency=request.data.get("monitoring_frequency") or "monthly",
             applied_standard_id=request.data.get("applied_standard") or None,
             machine_class_id=request.data.get("machine_class") or None,
@@ -263,7 +293,7 @@ class EquipmentCollectionView(AssetAdminView):
         # Points are what readings hang off; an equipment without them cannot
         # be measured, so the usual layout is offered up front.
         if request.data.get("generate_points", True):
-            _generate_points(equipment, int(request.data.get("first_point") or 1))
+            _generate_points(equipment, int(request.data.get("first_point") or 0) or None)
 
         return Response({
             "id": equipment.id, "asset_code": equipment.asset_code,
@@ -304,12 +334,19 @@ class PointCollectionView(AssetAdminView):
         ).first()
         if equipment is None:
             raise ValidationError("Debes elegir un equipo")
-        number = int(request.data.get("number") or 1)
+        number = int(request.data.get("number") or _next_point_number(equipment.asset_group_id))
         axis = request.data.get("axis") or "N"
-        if MeasurementPoint.objects.filter(
-            equipment=equipment, number=number, axis=axis
-        ).exists():
-            raise ValidationError(f"El punto {number}{axis} ya existe en este equipo")
+        clash = (
+            MeasurementPoint.objects.filter(
+                equipment__asset_group_id=equipment.asset_group_id, number=number, axis=axis
+            )
+            .select_related("equipment")
+            .first()
+        )
+        if clash is not None:
+            raise ValidationError(
+                f"El punto {number}{axis} ya existe en el conjunto, en {clash.equipment.name}"
+            )
 
         point = MeasurementPoint.objects.create(
             company_id=request.company_id, equipment=equipment, number=number, axis=axis,
@@ -322,6 +359,48 @@ class PointCollectionView(AssetAdminView):
 class PointDetailView(AssetAdminView):
     required_permission = "assets.manage_point"
 
+    def patch(self, request, point_id: int):
+        """Correcting a point, instead of deleting and rebuilding it.
+
+        Rebuilding takes its readings with it, so a layout typed with the
+        wrong side used to cost a year of history.
+        """
+        self.require(request)
+        point = _get(self.scoped(MeasurementPoint, request), point_id, "punto")
+
+        number = request.data.get("number")
+        axis = request.data.get("axis") or point.axis
+        if number is not None or "axis" in request.data:
+            number = int(number if number is not None else point.number)
+            clash = (
+                MeasurementPoint.objects.filter(
+                    equipment__asset_group_id=point.equipment.asset_group_id,
+                    number=number, axis=axis,
+                )
+                .exclude(id=point.id)
+                .select_related("equipment")
+                .first()
+            )
+            if clash is not None:
+                raise ValidationError(
+                    f"El punto {number}{axis} ya existe en el conjunto, en {clash.equipment.name}"
+                )
+            point.number, point.axis = number, axis
+            # `label` is derived; letting it go stale is how a grid ends up
+            # printing 3H for a point that is now 4V.
+            point.label = f"{point.number}{point.axis if point.axis != 'N' else ''}"
+
+        for field in ("side", "point_type"):
+            if field in request.data:
+                setattr(point, field, request.data.get(field) or getattr(point, field))
+        if "is_active" in request.data:
+            point.is_active = bool(request.data["is_active"])
+        point.save()
+        return Response({
+            "id": point.id, "label": point.label, "number": point.number, "axis": point.axis,
+            "side": point.side, "point_type": point.point_type, "is_active": point.is_active,
+        })
+
     def delete(self, request, point_id: int):
         self.require(request)
         point = _get(self.scoped(MeasurementPoint, request), point_id, "punto")
@@ -333,21 +412,63 @@ class PointDetailView(AssetAdminView):
         return Response(status=204)
 
 
-def _generate_points(equipment: Equipment, first: int) -> None:
-    is_driver = equipment.position_in_group == "driver"
+def _generate_points(equipment: Equipment, first: int | None = None) -> None:
+    """Lays out the points of one machine, continuing the train's numbering.
+
+    The component of the kind decides how many there are — a gearbox read on
+    four points is not an exception, it is most of the reports.
+    """
+
+    component = equipment.group_component
+    spec = ComponentSpec(
+        label=component.label if component else equipment.name,
+        point_count=component.point_count if component else 2,
+        position=equipment.position_in_group,
+        equipment_type=equipment.equipment_type,
+    )
+    start = first if first else _next_point_number(equipment.asset_group_id)
     MeasurementPoint.objects.bulk_create([
         MeasurementPoint(
             company_id=equipment.company_id,
             equipment=equipment,
-            number=first + offset,
-            axis=axis,
-            side=("free_end" if offset == 0 else "coupling_end") if is_driver
-            else ("coupling_end" if offset == 0 else "opposite_coupling"),
+            number=row.number,
+            axis=row.axis,
+            side=row.side,
             point_type="bearing",
         )
-        for offset in (0, 1)
-        for axis in ("H", "V", "A")
+        for row in plan_layout([spec], first_number=start)
     ])
+
+
+def _component_for(group: AssetGroup, component_id, equipment_type: str):
+    """Which slot of the kind this machine fills.
+
+    Chosen explicitly when the form says so; otherwise the first slot of that
+    type still free, because a train with two bearing housings must not give
+    both of them the same points.
+    """
+
+    if group.kind_id is None:
+        return None
+    components = list(group.kind.components.all())
+    if component_id:
+        return next((row for row in components if row.id == int(component_id)), None)
+    used = set(
+        group.equipments.exclude(group_component=None).values_list("group_component_id", flat=True)
+    )
+    free = [row for row in components if row.id not in used]
+    return next((row for row in free if row.equipment_type == equipment_type), None)
+
+
+def _next_point_number(group_id: int) -> int:
+    """Point numbers run across the whole train, never per machine: the codes
+    the analyst writes (`HV-7`) carry no component, so a repeat is ambiguous."""
+
+    return next_number(
+        MeasurementPoint.objects.filter(equipment__asset_group_id=group_id).values_list(
+            "number", flat=True
+        )
+    )
 
 
 def _get(queryset, pk: int, label: str):

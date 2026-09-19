@@ -23,6 +23,8 @@ SIDE_LABELS = {
     "opposite_coupling": "LADO OPUESTO A ACOPLE",
     "inboard": "INTERIOR",
     "outboard": "EXTERIOR",
+    "lower": "INFERIOR",
+    "upper": "SUPERIOR",
     "custom": "GENERAL",
 }
 
@@ -138,36 +140,56 @@ def _operating(request, columns: list[dict]) -> tuple[dict, dict]:
 
 
 def _bands(request, equipment_id: int) -> list[ExportBand]:
-    """The limits actually in force for this equipment, resolved through the
-    same cascade that graded the readings."""
+    """The limits actually in force, resolved through the same cascade that
+    graded the readings — once per machine of the train.
+
+    The grid prints the whole train and a gearbox is not judged by the motor's
+    standard. The printed sheet lists the criteria side by side, each naming
+    what it governs, so a band never floats above rows it does not answer for.
+    """
     from modules.thresholds.application.evaluation import context_for
     from modules.thresholds.domain.services import resolve
     from modules.thresholds.infrastructure.repositories import DjangoThresholdRepository
 
     equipment = (
         Equipment.objects.for_company(request.company_id)
-        .select_related(
-            "asset_group__kind", "applied_standard", "machine_class", "nameplate"
-        )
+        .only("id", "asset_group_id")
         .filter(id=equipment_id)
         .first()
     )
     if equipment is None:
         return []
 
+    train = (
+        Equipment.objects.for_company(request.company_id)
+        .filter(asset_group_id=equipment.asset_group_id)
+        .select_related("asset_group__kind", "applied_standard", "machine_class", "nameplate")
+        .order_by("order_in_group", "id")
+    )
     repository = DjangoThresholdRepository(getattr(request, "language", "es"))
+    criteria: dict[tuple, dict] = {}
+    for machine in train:
+        for magnitude_code, aggregation in (("vel_rms", "rms"), ("env_accel", "peak")):
+            context = context_for(machine, magnitude_code, aggregation)
+            chosen = resolve(
+                repository.candidates(request.company_id, magnitude_code), context, date.today()
+            )
+            if chosen is None:
+                continue
+            key = (chosen.standard_code, chosen.machine_class, magnitude_code, aggregation)
+            entry = criteria.setdefault(key, {"set": chosen, "machines": []})
+            if machine.name not in entry["machines"]:
+                entry["machines"].append(machine.name)
+
     bands: list[ExportBand] = []
-    for magnitude_code, aggregation in (("vel_rms", "rms"), ("env_accel", "peak")):
-        context = context_for(equipment, magnitude_code, aggregation)
-        chosen = resolve(
-            repository.candidates(request.company_id, magnitude_code), context, date.today()
-        )
-        if chosen is None:
-            continue
+    for entry in criteria.values():
+        chosen = entry["set"]
+        scope = ", ".join(entry["machines"])
         for band in chosen.bands:
             bands.append(
                 ExportBand(
-                    status=f"{band.status.name} · {magnitude_code} ({chosen.unit_code})",
+                    status=f"{scope} · {band.status.name} · "
+                           f"{chosen.magnitude_code} ({chosen.unit_code})",
                     minimum="—" if band.min_value is None else str(band.min_value),
                     maximum="—" if band.max_value is None else str(band.max_value),
                 )

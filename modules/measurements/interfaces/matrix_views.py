@@ -122,6 +122,9 @@ class EquipmentMatrixView(APIView):
                     "side": reading.point.side,
                     "component": reading.point.equipment.name,
                     "component_id": reading.point.equipment_id,
+                    # The train prints in its own order, not in the order the
+                    # machines happened to be created.
+                    "component_order": reading.point.equipment.order_in_group,
                     "cells": {},
                 },
             )
@@ -160,6 +163,7 @@ class EquipmentMatrixView(APIView):
                             for row in block["rows"].values()
                         ),
                         key=lambda row: (
+                            row["component_order"],
                             row["component_id"],
                             SIDE_ORDER.get(row["side"], 9),
                             row["number"],

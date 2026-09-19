@@ -22,6 +22,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from modules.assets.domain.asset_code import generate as generate_code
+from modules.assets.domain.point_layout import ComponentSpec, plan_layout
 from modules.assets.models import (
     Area,
     AssetGroup,
@@ -437,34 +438,38 @@ class Command(BaseCommand):
     def _group_kinds(self, company) -> dict:
         """The train taxonomy and the point layout each one measures.
 
-        Straight from `MPd-AV-N°006-13-EB P-757`: motor on points 1 and 2,
-        driven machine on 3 and 4, three axes each, with envelope and
-        temperature read on the horizontal.
+        Straight from the inspection reports: the numbering runs across the
+        whole train, and each machine contributes as many points as it is
+        actually read on — 2+4 on a motor-gearbox, 1+5 on a dryer group.
         """
-        axes = {"H": ["vel_rms", "env_accel", "temp"], "V": ["vel_rms"], "A": ["vel_rms"]}
-        sides = {0: ("free_end", "coupling_end"), 1: ("coupling_end", "opposite_coupling")}
         created = {}
         for code, name, components in GROUP_KINDS:
             kind = AssetGroupKind.objects.create(
                 company=company, code=code, name=name, is_builtin=True,
                 translations={"name": {"es": name}},
             )
-            for index, (label, equipment_type, position) in enumerate(components):
-                component = AssetGroupComponent.objects.create(
-                    kind=kind, order=index, label=label,
-                    equipment_type=equipment_type, position=position,
-                )
-                first = 1 + index * 2
-                PointTemplate.objects.bulk_create([
-                    PointTemplate(
-                        kind=kind, component=component, number=first + offset, axis=axis,
-                        side=sides.get(index, ("custom", "custom"))[offset],
-                        magnitudes=magnitudes,
-                        order=(first + offset) * 10 + list(axes).index(axis),
+            rows = []
+            for index, (label, equipment_type, position, point_count) in enumerate(components):
+                rows.append(
+                    AssetGroupComponent.objects.create(
+                        kind=kind, order=index, label=label, equipment_type=equipment_type,
+                        position=position, point_count=point_count,
                     )
-                    for offset in (0, 1)
-                    for axis, magnitudes in axes.items()
+                )
+            by_label = {component.label: component for component in rows}
+            PointTemplate.objects.bulk_create([
+                PointTemplate(
+                    kind=kind, component=by_label[row.component_label], number=row.number,
+                    axis=row.axis, side=row.side, magnitudes=row.magnitudes, order=row.order,
+                )
+                for row in plan_layout([
+                    ComponentSpec(
+                        label=component.label, point_count=component.point_count,
+                        position=component.position, equipment_type=component.equipment_type,
+                    )
+                    for component in rows
                 ])
+            ])
             created[code] = kind
         return created
 
@@ -474,6 +479,10 @@ class Command(BaseCommand):
         areas: dict[str, Area] = {}
         sectors: dict[tuple[str, str], Sector] = {}
         groups: dict[tuple[str, str], AssetGroup] = {}
+        # Which slot of the kind each train has already filled, and where its
+        # point numbering has got to.
+        slots: dict[int, set[int]] = {}
+        numbering: dict[int, int] = {}
         taken: set[str] = set()
         equipment: list[Equipment] = []
 
@@ -517,12 +526,15 @@ class Command(BaseCommand):
             )
             taken.add(code)
             is_motor = equipment_type == "motor"
+            component = _free_component(group, equipment_type, slots)
 
             item = Equipment.objects.create(
                 company=company, asset_group=group, asset_code=code,
                 client_tag=row.client_tag or "", name=row.equipment_name or equipment_type.title(),
                 equipment_type=equipment_type,
                 position_in_group="driver" if is_motor else "driven",
+                group_component=component,
+                order_in_group=component.order if component else len(slots.get(group.id, ())),
                 monitoring_frequency=row.frequency or "monthly",
                 applied_standard=iso if equipment_type in {"motor", "fan", "blower"} else tac,
                 machine_class=class_iii if equipment_type in {"motor", "fan", "blower"} else None,
@@ -534,18 +546,26 @@ class Command(BaseCommand):
             item.rgp = row
             equipment.append(item)
 
-            base = 1 if is_motor else 3
+            # The numbering runs across the train, so the gearbox of a
+            # motor-gearbox set owns 3 to 6 and never restarts at 1.
+            spec = ComponentSpec(
+                label=component.label if component else item.name,
+                point_count=component.point_count if component else 2,
+                position=item.position_in_group,
+                equipment_type=equipment_type,
+            )
+            first = numbering.get(group.id, 1)
+            rows = plan_layout([spec], first_number=first)
+            numbering[group.id] = max(point.number for point in rows) + 1 if rows else first
             MeasurementPoint.objects.bulk_create([
                 MeasurementPoint(
-                    company=company, equipment=item, number=base + offset, axis=axis,
-                    side=("free_end" if offset == 0 else "coupling_end") if is_motor
-                    else ("coupling_end" if offset == 0 else "opposite_coupling"),
-                    point_type="bearing", label=f"{base + offset}{axis}",
-                    blueprint_x=0.25 + 0.22 * (base + offset - 1),
-                    blueprint_y=0.45 + (0.12 if axis == "V" else 0.0),
+                    company=company, equipment=item, number=point.number, axis=point.axis,
+                    side=point.side, point_type="bearing",
+                    label=f"{point.number}{point.axis}",
+                    blueprint_x=0.25 + 0.22 * (point.number - 1),
+                    blueprint_y=0.45 + (0.12 if point.axis == "V" else 0.0),
                 )
-                for offset in (0, 1)
-                for axis in ("H", "V", "A")
+                for point in rows
             ])
         return equipment
 
@@ -827,19 +847,31 @@ OPERATING_PARAMETERS = [
     ("oil_hours", "Horas del lubricante", "Oil hours", "h", "oil_analysis", [], True),
 ]
 
+# Straight from `docs/vibration/reports`: the components of a train and how
+# many points each one is read on. Nothing here is uniform — the gearbox of
+# report 0021 carries four points against the motor's two, and the dryer
+# groups are read on a single bearing housing plus five on the gearbox.
 GROUP_KINDS = [
-    ("motor_pump", "Motor-Bomba", [("MOTOR", "motor", "driver"), ("BOMBA", "pump", "driven")]),
+    ("motor_pump", "Motor-Bomba",
+     [("MOTOR", "motor", "driver", 2), ("BOMBA", "pump", "driven", 2)]),
     ("motor_compressor", "Motor-Compresor",
-     [("MOTOR", "motor", "driver"), ("COMPRESOR", "compressor", "driven")]),
+     [("MOTOR", "motor", "driver", 2), ("COMPRESOR", "compressor", "driven", 2)]),
     ("motor_turbine", "Motor-Turbina",
-     [("MOTOR", "motor", "driver"), ("TURBINA", "turbine", "driven")]),
+     [("MOTOR", "motor", "driver", 2), ("TURBINA", "turbine", "driven", 2)]),
     ("motor_gearbox", "Motor-Reductor",
-     [("MOTOR", "motor", "driver"), ("REDUCTOR", "gearbox", "driven")]),
+     [("MOTOR", "motor", "driver", 2), ("REDUCTOR", "gearbox", "driven", 4)]),
+    ("motor_gearbox_bearings", "Motor-Reductor con chumaceras",
+     [("MOTOR", "motor", "driver", 2), ("REDUCTOR", "gearbox", "driven", 4),
+      ("CHUMACERA LADO MANDO", "bearing_housing", "driven", 2),
+      ("CHUMACERA LADO TRANSMISIÓN", "bearing_housing", "driven", 2)]),
+    ("bearing_gearbox", "Chumacera-Reductor",
+     [("CHUMACERA", "bearing_housing", "driver", 1),
+      ("REDUCTOR", "gearbox", "driven", 5)]),
     ("motor_fan", "Motor-Ventilador",
-     [("MOTOR", "motor", "driver"), ("VENTILADOR", "fan", "driven")]),
+     [("MOTOR", "motor", "driver", 2), ("VENTILADOR", "fan", "driven", 2)]),
     ("motor_blower", "Motor-Soplador",
-     [("MOTOR", "motor", "driver"), ("SOPLADOR", "blower", "driven")]),
-    ("standalone", "Equipo aislado", [("EQUIPO", "other", "driver")]),
+     [("MOTOR", "motor", "driver", 2), ("SOPLADOR", "blower", "driven", 2)]),
+    ("standalone", "Equipo aislado", [("EQUIPO", "other", "driver", 2)]),
 ]
 
 FAULT_KEYWORDS = {
@@ -902,6 +934,22 @@ def _unique(candidate: str, taken: set[str]) -> str:
     raise ValueError(candidate)
 
 
+def _free_component(group, equipment_type: str, slots: dict):
+    """The first slot of the train's kind that no machine has taken yet."""
+
+    if group.kind_id is None:
+        return None
+    used = slots.setdefault(group.id, set())
+    components = list(group.kind.components.all())
+    match = next(
+        (c for c in components if c.id not in used and c.equipment_type == equipment_type),
+        None,
+    ) or next((c for c in components if c.id not in used), None)
+    if match is not None:
+        used.add(match.id)
+    return match
+
+
 def _group_kind(group_name: str, equipment_type: str | None) -> str:
     name = (group_name or "").upper()
     if "BBA" in name or "BOMBA" in name:
@@ -912,6 +960,12 @@ def _group_kind(group_name: str, equipment_type: str | None) -> str:
         return "motor_blower"
     if "VENTILADOR" in name:
         return "motor_fan"
+    # The press and dryer trains of the source reports are not motor+gearbox:
+    # the presses carry two bearing housings, the dryer groups have no motor.
+    if "PRENSA" in name:
+        return "motor_gearbox_bearings"
+    if "SECADOR" in name or "SIZE PRESS" in name:
+        return "bearing_gearbox"
     if "REDUCTOR" in name or "ACION" in name:
         return "motor_gearbox"
     return "standalone"
