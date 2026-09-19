@@ -6,7 +6,7 @@ MANIFEST = Manifest(
     version="0.1.0",
     summary="Ingesta masiva de imágenes, conversión nocturna y galerías por equipo",
     category="Sistema",
-    depends=("core",),
+    depends=("core", "services"),
     auto_install=True,
     permissions=(
         ("media.view", "Ver multimedia"),

@@ -38,6 +38,13 @@ class MediaAsset(TenantModel):
     exif = models.JSONField(default=dict, blank=True)
     geo = models.JSONField(null=True, blank=True)
 
+    # Denormalised so the equipment gallery is one indexed range scan instead
+    # of a join through visits. Plain ids, not FKs: `media` depends on `core`
+    # alone, and the owner has always been generic. They are filled on upload
+    # from the visit and never change afterwards.
+    equipment_ref = models.PositiveBigIntegerField(null=True, blank=True)
+    captured_on = models.DateField(null=True, blank=True)
+
     processing_state = models.CharField(max_length=20, choices=STATES, default="pending", db_index=True)
     derivatives = models.JSONField(default=dict, blank=True)
     thermal_meta = models.JSONField(null=True, blank=True)
@@ -49,4 +56,15 @@ class MediaAsset(TenantModel):
         indexes = [
             models.Index(fields=["company", "owner_type", "owner_id"]),
             models.Index(fields=["processing_state", "created_at"]),
+            # The gallery pages by (created_at, id) descending and filters by
+            # kind, so the index carries the sort: thousands of images per
+            # machine cost the same as a dozen.
+            models.Index(
+                fields=["company", "equipment_ref", "kind", "-created_at", "-id"],
+                name="media_equipment_page_idx",
+            ),
+            models.Index(
+                fields=["company", "equipment_ref", "-created_at", "-id"],
+                name="media_equipment_all_idx",
+            ),
         ]

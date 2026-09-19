@@ -132,10 +132,20 @@ SPECTACULAR_SETTINGS = {
     "SERVE_INCLUDE_SCHEMA": False,
 }
 
+from celery.schedules import crontab  # noqa: E402
+
 CELERY_BROKER_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 CELERY_TASK_ROUTES = {"media.*": {"queue": "media"}}
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+# The heavy image work runs when nobody is waiting for it (doc 05). A
+# deployment without a broker runs the same code from `manage.py media_convert`.
+CELERY_BEAT_SCHEDULE = {
+    "media-convert-pending": {
+        "task": "media.convert_pending",
+        "schedule": crontab(hour=0, minute=15),
+    },
+}
 
 # `local` keeps files on disk, which is what a single-server install and
 # every developer machine actually has; `s3` signs URLs against object storage.
