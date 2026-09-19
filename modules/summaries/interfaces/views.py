@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
+from django.db.models import Max
+from django.utils import timezone
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -35,7 +39,23 @@ class PlantSummaryView(APIView):
         if areas is not None:
             queryset = queryset.filter(asset_group__sector__area_id__in=areas)
 
-        rows = [_to_domain(item, language) for item in queryset]
+        equipments = list(queryset)
+        # One monitoring cycle back. A machine measured four months ago is not
+        # green today, it is uncovered, and the traffic light has to say so.
+        days = int(request.query_params.get("days") or 45)
+        ids = [item.id for item in equipments]
+        served = _route_membership(request.company_id, ids)
+        worst = _worst_by_technique(request.company_id, ids, days)
+        statuses = _condition_statuses(request.company_id, language)
+
+        rows = [
+            _to_domain(
+                item, language, technique,
+                statuses.get(worst.get((item.id, technique))),
+            )
+            for item in equipments
+            for technique in served.get(item.id, ())
+        ]
         summaries = by_technique(rows)
         techniques = _technique_names(language)
 
@@ -49,7 +69,62 @@ class PlantSummaryView(APIView):
         ])
 
 
-def _to_domain(item: Equipment, language: str) -> EquipmentStatus:
+def _route_membership(company_id: int, ids: list[int]) -> dict[int, list[str]]:
+    """Which services each machine is actually on.
+
+    A transformer is not missing from the vibration round; it was never on it.
+    Membership is "has ever been measured by this service", so a machine that
+    the route skipped this month counts as uncovered instead of green.
+    """
+    from modules.measurements.models import Reading
+
+    rows = (
+        Reading.objects.for_company(company_id)
+        .filter(point__equipment_id__in=ids)
+        .values_list("point__equipment_id", "magnitude__technique__code")
+        .distinct()
+    )
+    membership: dict[int, list[str]] = {}
+    for equipment_id, technique in rows:
+        membership.setdefault(equipment_id, []).append(technique)
+    return membership
+
+
+def _worst_by_technique(company_id: int, ids: list[int], days: int) -> dict:
+    """The worst condition each machine reached per service, in one query.
+
+    "Gana el peor" is the rule of the sheet, so the aggregate *is* the answer:
+    no need to find the latest reading of every magnitude one by one.
+    """
+    from modules.measurements.models import Reading
+
+    rows = (
+        Reading.objects.for_company(company_id)
+        .filter(
+            point__equipment_id__in=ids,
+            taken_at__gte=timezone.now() - timedelta(days=days),
+            condition_status__isnull=False,
+        )
+        .values("point__equipment_id", "magnitude__technique__code")
+        .annotate(worst=Max("condition_status__severity"))
+    )
+    found: dict[tuple[int, str], int] = {}
+    for row in rows:
+        key = (row["point__equipment_id"], row["magnitude__technique__code"])
+        found[key] = max(found.get(key, 0), row["worst"])
+    return found
+
+
+def _condition_statuses(company_id: int, language: str) -> dict:
+    from modules.thresholds.models import Status as StatusRow
+
+    return {
+        row.severity: _status(row, language)
+        for row in StatusRow.objects.for_company(company_id).filter(kind="condition")
+    }
+
+
+def _to_domain(item: Equipment, language: str, technique: str, condition) -> EquipmentStatus:
     area = item.asset_group.sector.area
     return EquipmentStatus(
         equipment_id=item.id,
@@ -60,8 +135,8 @@ def _to_domain(item: Equipment, language: str) -> EquipmentStatus:
         sector_label=item.asset_group.sector.name,
         asset_group_id=item.asset_group_id,
         asset_group_label=item.asset_group.name,
-        technique_code="vibration",
-        condition=_status(item.condition_status, language),
+        technique_code=technique,
+        condition=condition,
         availability=_status(item.availability_status, language),
     )
 
