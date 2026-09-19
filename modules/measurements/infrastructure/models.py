@@ -99,3 +99,71 @@ class ReadingBatch(TimeStampedModel):
     idempotency_key = models.CharField(max_length=64, unique=True)
     service_visit = models.ForeignKey("services.ServiceVisit", on_delete=models.CASCADE, related_name="batches")
     reading_count = models.PositiveIntegerField(default=0)
+    # Which readings this batch produced. A count alone cannot answer a retry:
+    # "the first N readings of the visit" are whatever was already there.
+    reading_ids = models.JSONField(default=list, blank=True)
+
+
+class Spectrum(TenantModel):
+    """A spectrum, as both realities of doc 00 §8 have it.
+
+    Today the instrument produces a screen capture and the analyst writes the
+    diagnosis under it; tomorrow the same route exports arrays. Both live in
+    one row so a machine's history does not split in two the day the CSV
+    import lands: `image` is the capture, `data_key` the numeric pair.
+
+    `caption` + `diagnosis` are the (image, label) pair the vision model will
+    be trained on, which is why the diagnosis is a relation and not prose.
+    """
+
+    TYPES = [
+        ("velocity", "Velocidad"), ("envelope", "Envolvente"),
+        ("acceleration", "Aceleración"), ("demodulation", "Demodulación"),
+        ("waveform", "Forma de onda"),
+    ]
+
+    point = models.ForeignKey(
+        "assets.MeasurementPoint", on_delete=models.CASCADE, related_name="spectra"
+    )
+    reading = models.ForeignKey(
+        Reading, on_delete=models.SET_NULL, null=True, blank=True, related_name="spectra"
+    )
+    service_visit = models.ForeignKey(
+        "services.ServiceVisit", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="spectra",
+    )
+    taken_at = models.DateTimeField(db_index=True)
+    spectrum_type = models.CharField(max_length=20, choices=TYPES, default="velocity")
+
+    fmin_hz = models.FloatField(null=True, blank=True)
+    fmax_hz = models.FloatField(null=True, blank=True)
+    lines = models.PositiveIntegerField(null=True, blank=True)
+    rpm_at_capture = models.FloatField(null=True, blank=True)
+    window = models.CharField(max_length=20, blank=True)
+    averages = models.PositiveSmallIntegerField(null=True, blank=True)
+    unit = models.ForeignKey(Unit, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+
+    # The numeric pair, gzipped JSON in the object store. Kept out of the row
+    # because a 3200-line spectrum is not something a list endpoint should
+    # ever load, and out of the database because it is written once and read
+    # whole.
+    data_key = models.CharField(max_length=300, blank=True)
+    peak_hz = models.FloatField(null=True, blank=True)
+    peak_amplitude = models.FloatField(null=True, blank=True)
+
+    # The capture of the instrument's screen, when that is all there is.
+    image = models.ForeignKey(
+        "media.MediaAsset", on_delete=models.SET_NULL, null=True, blank=True, related_name="spectra"
+    )
+    caption = models.CharField(max_length=300, blank=True)
+    diagnosis = models.ManyToManyField("diagnostics.FaultMode", blank=True, related_name="spectra")
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["company", "point", "spectrum_type", "-taken_at"]),
+        ]
+        ordering = ["-taken_at"]
+
+    @property
+    def has_numeric_data(self) -> bool:
+        return bool(self.data_key)
