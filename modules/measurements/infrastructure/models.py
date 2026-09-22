@@ -18,6 +18,11 @@ class Unit(TranslatableModel):
 class Technique(TranslatableModel):
     code = models.SlugField(max_length=30, unique=True)
     name = models.CharField(max_length=80)
+    # Which of its magnitudes the plant view prints beside the bar. An
+    # ultrasound round reports both a dB level and a wall thickness, and the
+    # headline of that report is the thickness — the number that decides
+    # whether the roll keeps turning.
+    headline_magnitude = models.SlugField(max_length=40, blank=True)
     module_code = models.SlugField(max_length=60)
 
 
@@ -33,6 +38,24 @@ class Magnitude(TranslatableModel):
     default_aggregation = models.CharField(max_length=20, default="rms")
     higher_is_worse = models.BooleanField(default=True)
     decimals = models.PositiveSmallIntegerField(default=2)
+    # Velocity is read on three axes of a bearing; the envelope, the
+    # temperature of the housing and an ultrasound level are read once on it.
+    # Writing them three times is what filled the record of values with rows
+    # the report never had — "1H, 1V, 1A" where the sheet prints "1 ENV".
+    per_axis = models.BooleanField(default=True)
+    short_code = models.CharField(
+        max_length=16, blank=True,
+        help_text='How the sheet names the row: "{n} ENV", "TEMP {n}", "UT {n}"',
+    )
+
+    def row_label(self, number: int) -> str:
+        """The name the printed sheet gives this row.
+
+        The customer writes "1 ENV" but "TEMP 1"; the order is theirs, not a
+        convention worth normalising away.
+        """
+        template = self.short_code or f"{{n}} {self.code[:4].upper()}"
+        return template.replace("{n}", str(number))
 
 
 class Instrument(TenantModel):

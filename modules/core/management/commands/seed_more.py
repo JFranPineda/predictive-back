@@ -48,7 +48,10 @@ ROUNDS = {
     "ultrasound": {
         "prefix": "MPd-US",
         "instrument": "skf_gx75",
-        "magnitudes": {"us_db": (12.0, 4.0)},
+        # Airborne dB finds the friction; conventional UT measures what is
+        # left of the metal. The report in `docs/v2` is the second kind: a
+        # thickness sweep over the journals of the dryer rolls.
+        "magnitudes": {"us_db": (12.0, 4.0), "thickness_mm": (9.6, 1.4)},
         "equipment_types": ("motor", "pump", "gearbox", "fan", "blower", "compressor"),
         "share": 0.45,
     },
@@ -71,6 +74,12 @@ ROUNDS = {
 # Limits the demo was missing. Both magnitudes get worse as the number falls,
 # which is the case `higher_is_worse=False` exists for.
 MISSING_LIMITS = {
+    # Derived from the verdicts in `ORDEN_14778`: every polín the inspector
+    # marked MEDIO has a reading under 8.0 mm, and every ACEPTABLE one sits
+    # at or above it. The wall only ever gets thinner, so lower is worse.
+    "thickness_mm": {"unit": "mm", "aggregation": "min",
+                     "bands": [("operational", 8.0, None), ("alarm", 7.0, 8.0),
+                               ("shutdown", None, 7.0)]},
     "viscosity_40": {"unit": "cSt", "aggregation": "avg",
                      "bands": [("operational", 61.0, None), ("alarm", 54.0, 61.0),
                                ("shutdown", None, 54.0)]},
@@ -125,6 +134,9 @@ class Command(BaseCommand):
 
         limits = self._limits(company)
         services = self._services(company, options["rounds"])
+        # A magnitude added after its round already exists would otherwise
+        # never get a reading, and a magnitude with no readings is invisible.
+        services += self._top_up(company)
         images = self._media(
             company, options["images"], options["machines"], options["visits"]
         )
@@ -139,6 +151,8 @@ class Command(BaseCommand):
 
     def _limits(self, company) -> int:
         """A reading with no band is never graded, and never reaches a summary."""
+
+        self._thickness_magnitude()
 
         statuses = {row.code: row for row in Status.objects.filter(company=company, kind="condition")}
         made = 0
@@ -161,6 +175,32 @@ class Command(BaseCommand):
             ])
             made += 1
         return made
+
+    @staticmethod
+    def _thickness_magnitude() -> None:
+        """Conventional UT: what is left of the wall, in millimetres."""
+
+        unit, _ = Unit.objects.get_or_create(
+            code="mm", defaults={"name": "Milímetros", "translations": {"name": {"es": "Milímetros"}}}
+        )
+        technique = Technique.objects.filter(code="ultrasound").first()
+        if technique is None:
+            return
+        Magnitude.objects.update_or_create(
+            code="thickness_mm",
+            defaults={
+                "technique": technique,
+                "name": "Espesor de pared",
+                "default_unit": unit,
+                "default_aggregation": "min",
+                # A wall only gets thinner: the minimum is the verdict.
+                "higher_is_worse": False,
+                "decimals": 2,
+                "per_axis": False,
+                "short_code": "ESP {n}",
+                "translations": {"name": {"es": "Espesor de pared", "en": "Wall thickness"}},
+            },
+        )
 
     # ---------------------------------------------------------------- services
 
@@ -260,6 +300,41 @@ class Command(BaseCommand):
         VisitParticipant.objects.bulk_create(participants, batch_size=500)
         Reading.objects.bulk_create(readings, batch_size=2000)
         return len(readings)
+
+    def _top_up(self, company) -> int:
+        """Fills a magnitude the round was missing, on the visits it already has."""
+
+        statuses = {row.code: row for row in Status.objects.filter(company=company, kind="condition")}
+        made = 0
+        for technique_code, spec in ROUNDS.items():
+            for code, (centre, spread) in spec["magnitudes"].items():
+                magnitude = Magnitude.objects.filter(code=code).select_related(
+                    "default_unit"
+                ).first()
+                if magnitude is None or Reading.objects.filter(magnitude=magnitude).exists():
+                    continue
+                visits = list(
+                    ServiceVisit.objects.filter(
+                        company=company, service_order__technique__code=technique_code
+                    ).select_related("equipment")
+                )
+                rows = []
+                for visit in visits:
+                    point = MeasurementPoint.objects.filter(equipment=visit.equipment).first()
+                    if point is None:
+                        continue
+                    value = _drifted(centre, spread, random.uniform(-1, 1), 1, 2)
+                    rows.append(Reading(
+                        company=company, taken_at=visit.visited_at, point=point,
+                        service_visit=visit, magnitude=magnitude,
+                        value=Decimal(f"{value:.2f}"), unit=magnitude.default_unit,
+                        aggregation=magnitude.default_aggregation,
+                        condition_status=_grade(value, magnitude, statuses),
+                        instrument=visit.instrument, quality="ok",
+                    ))
+                Reading.objects.bulk_create(rows, batch_size=1000)
+                made += len(rows)
+        return made
 
     # ------------------------------------------------------------------- media
 

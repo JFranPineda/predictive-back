@@ -9,7 +9,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.assets.models import Equipment
-from modules.summaries.domain.rollup import EquipmentStatus, by_technique
+from modules.summaries.domain.rollup import Driver, EquipmentStatus, by_technique
 from modules.thresholds.domain.entities import Status, StatusKind
 
 
@@ -46,12 +46,14 @@ class PlantSummaryView(APIView):
         ids = [item.id for item in equipments]
         served = _route_membership(request.company_id, ids)
         worst = _worst_by_technique(request.company_id, ids, days)
+        drivers = _drivers(request.company_id, equipments, days)
         statuses = _condition_statuses(request.company_id, language)
 
         rows = [
             _to_domain(
                 item, language, technique,
                 statuses.get(worst.get((item.id, technique))),
+                drivers.get((item.id, technique)),
             )
             for item in equipments
             for technique in served.get(item.id, ())
@@ -124,7 +126,76 @@ def _condition_statuses(company_id: int, language: str) -> dict:
     }
 
 
-def _to_domain(item: Equipment, language: str, technique: str, condition) -> EquipmentStatus:
+def _drivers(company_id: int, equipments: list, days: int) -> dict:
+    """The reading behind each machine's colour, per service.
+
+    The one that earned the worst verdict; among equals, the most extreme in
+    its own magnitude's direction. That is the number the report prints next
+    to the bar, and the reason the tag beside it is worth walking to.
+    """
+    from modules.measurements.models import Reading, Technique
+
+    # The magnitude each report leads with. Everything else is a candidate
+    # only when the headline was not measured.
+    headline = {
+        row.code: row.headline_magnitude
+        for row in Technique.objects.exclude(headline_magnitude="")
+    }
+    tags = {item.id: (item.client_tag or item.asset_code) for item in equipments}
+    rows = (
+        Reading.objects.for_company(company_id)
+        .filter(
+            point__equipment_id__in=list(tags),
+            taken_at__gte=timezone.now() - timedelta(days=days),
+            value__isnull=False,
+        )
+        .values_list(
+            "point__equipment_id",
+            "magnitude__technique__code",
+            "magnitude__code",
+            "magnitude__default_unit__code",
+            "magnitude__higher_is_worse",
+            "value",
+            "condition_status__severity",
+        )
+    )
+
+    best: dict[tuple[int, str], tuple[tuple[int, int], Driver]] = {}
+    for equipment_id, technique, magnitude, unit, higher, value, severity in rows:
+        key = (equipment_id, technique)
+        # A headline reading outranks any other, however alarming the other
+        # looks: 16 dB of friction is not what decides a roll's thickness.
+        rank = (1 if magnitude == headline.get(technique) else 0, severity or 0)
+        current = best.get(key)
+        candidate = Driver(
+            value=float(value),
+            unit=unit,
+            magnitude_code=magnitude,
+            higher_is_worse=higher,
+            equipment_id=equipment_id,
+            equipment_tag=tags[equipment_id],
+        )
+        if current is None or rank > current[0] or (
+            rank == current[0] and _beats(candidate, current[1])
+        ):
+            best[key] = (rank, candidate)
+    return {key: driver for key, (_, driver) in best.items()}
+
+
+def _beats(candidate: Driver, held: Driver) -> bool:
+    """Only compare like with like: mm/s never outranks gE."""
+    if candidate.magnitude_code != held.magnitude_code:
+        return candidate.higher_is_worse and not held.higher_is_worse
+    return (
+        candidate.value > held.value
+        if candidate.higher_is_worse
+        else candidate.value < held.value
+    )
+
+
+def _to_domain(
+    item: Equipment, language: str, technique: str, condition, driver=None
+) -> EquipmentStatus:
     area = item.asset_group.sector.area
     return EquipmentStatus(
         equipment_id=item.id,
@@ -138,6 +209,7 @@ def _to_domain(item: Equipment, language: str, technique: str, condition) -> Equ
         technique_code=technique,
         condition=condition,
         availability=_status(item.availability_status, language),
+        driver=driver,
     )
 
 
@@ -160,11 +232,25 @@ def _node(node) -> dict:
         "evaluated": node.evaluated,
         "coverage": node.coverage,
         "worst": _status_payload(node.worst),
+        "driver": _driver_payload(node.driver),
         "counts": [
             {"status": _status_payload(count.status), "count": count.count}
             for count in node.counts
         ],
         "children": [_node(child) for child in node.children],
+    }
+
+
+def _driver_payload(driver) -> dict | None:
+    if driver is None:
+        return None
+    return {
+        "value": driver.value,
+        "unit": driver.unit,
+        "magnitude_code": driver.magnitude_code,
+        "higher_is_worse": driver.higher_is_worse,
+        "equipment_id": driver.equipment_id,
+        "equipment_tag": driver.equipment_tag,
     }
 
 

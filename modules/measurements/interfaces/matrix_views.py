@@ -109,14 +109,28 @@ class EquipmentMatrixView(APIView):
                     "unit": reading.unit.code,
                     "aggregation": reading.aggregation,
                     "decimals": magnitude.decimals,
+                    # The trend selector has no axis to offer on a magnitude
+                    # read once per bearing.
+                    "per_axis": magnitude.per_axis,
                     "rows": {},
                 },
             )
+            # A magnitude read once on the bearing owns one row per point, not
+            # one per axis: the sheet prints "1 ENV", never "1H, 1V, 1A".
+            row_key = (
+                reading.point_id
+                if magnitude.per_axis
+                else (reading.point.equipment_id, reading.point.number)
+            )
             row = block["rows"].setdefault(
-                reading.point_id,
+                row_key,
                 {
                     "point_id": reading.point_id,
-                    "label": reading.point.label,
+                    "label": (
+                        reading.point.label
+                        if magnitude.per_axis
+                        else magnitude.row_label(reading.point.number)
+                    ),
                     "number": reading.point.number,
                     "axis": reading.point.axis,
                     "side": reading.point.side,

@@ -29,6 +29,40 @@ NOT_EVALUATED = Status(
 
 
 @dataclass(frozen=True, slots=True)
+class Driver:
+    """The number behind the colour.
+
+    A red area says something is wrong; "12.42 mm/s" says how wrong, and the
+    tag says which machine to walk to. Without them the traffic light is a
+    mood, and the analyst opens the spreadsheet anyway.
+    """
+
+    value: float
+    unit: str
+    magnitude_code: str
+    higher_is_worse: bool
+    equipment_id: int
+    equipment_tag: str
+
+
+def worst_driver(drivers: list[Driver]) -> Driver | None:
+    """The extreme reading of a node, in its own magnitude's direction.
+
+    Thickness and viscosity get worse as they fall, so the minimum is the one
+    worth printing — taking the maximum would show the healthiest polín of
+    the area and call it the headline.
+    """
+    if not drivers:
+        return None
+    higher = [row for row in drivers if row.higher_is_worse]
+    lower = [row for row in drivers if not row.higher_is_worse]
+    # Mixed directions in one node: the ones that grow are the alarming kind.
+    if higher:
+        return max(higher, key=lambda row: row.value)
+    return min(lower, key=lambda row: row.value)
+
+
+@dataclass(frozen=True, slots=True)
 class EquipmentStatus:
     equipment_id: int
     name: str
@@ -41,6 +75,7 @@ class EquipmentStatus:
     technique_code: str
     condition: Status | None
     availability: Status | None
+    driver: Driver | None = None
 
     @property
     def effective(self) -> Status:
@@ -72,6 +107,7 @@ class SummaryNode:
     counts: list[StatusCount] = field(default_factory=list)
     children: list["SummaryNode"] = field(default_factory=list)
     worst: Status = NOT_EVALUATED
+    driver: Driver | None = None
 
     @property
     def color(self) -> str:
@@ -122,6 +158,7 @@ def roll_up(rows: list[EquipmentStatus], levels: tuple[str, ...] = LEVELS) -> li
             evaluated=sum(1 for row in bucket if row.counts_for_health),
             counts=_count(statuses),
             worst=worst_of(statuses),
+            driver=worst_driver([row.driver for row in bucket if row.driver]),
             children=roll_up(bucket, rest),
         )
         nodes.append(node)
