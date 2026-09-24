@@ -20,27 +20,42 @@ class UserListView(APIView):
         memberships = (
             Membership.objects.filter(company_id=request.company_id)
             .select_related("user", "role")
-            .prefetch_related("restrictions")
+            .prefetch_related("restrictions", "role__permissions")
             .order_by("user__first_name", "user__last_name")
         )
-        return Response([
-            {
-                "id": membership.user_id,
-                "email": membership.user.email,
-                "full_name": membership.user.get_full_name(),
-                "initials": membership.user.initials,
-                "role": membership.role.code,
-                "role_name": membership.role.name,
-                "is_external": membership.user.is_external,
-                "is_active": membership.user.is_active,
-                "language": membership.user.language or "",
-                "area_restrictions": [
-                    ref for restriction in membership.restrictions.all()
-                    for ref in restriction.refs
-                ],
-            }
-            for membership in memberships
-        ])
+        return Response([_member_payload(membership) for membership in memberships])
+
+
+def _member_payload(membership) -> dict:
+    """One person, with everything an administrator has to be able to see.
+
+    The list used to show a role name and nothing behind it, so answering
+    "what can Jorge actually do?" meant reading the role screen and guessing.
+    The effective permissions travel with the person now.
+    """
+    from modules.security.domain.actor import behaviour_of
+
+    role = membership.role
+    return {
+        "id": membership.user_id,
+        "email": membership.user.email,
+        "full_name": membership.user.get_full_name(),
+        "initials": membership.user.initials,
+        "role": role.code,
+        "role_name": role.name,
+        "base_role": behaviour_of(role.base_role or role.code).value,
+        "shift": membership.shift,
+        "has_access_code": bool(membership.user.access_code_digest),
+        "access_code_set_at": membership.user.access_code_set_at,
+        "is_external": membership.user.is_external,
+        "is_active": membership.user.is_active,
+        "language": membership.user.language or "",
+        "permissions": sorted(p.code for p in role.permissions.all() if p.is_active),
+        "area_restrictions": [
+            ref for restriction in membership.restrictions.all()
+            for ref in restriction.refs
+        ],
+    }
 
 
 class UserCreateView(APIView):
@@ -70,9 +85,6 @@ class UserCreateView(APIView):
         if not email or "@" not in email:
             return Response({"type": "invalid_email", "title": "Correo no válido", "status": 400},
                             status=400)
-        if role_code not in {role.value for role in Role}:
-            return Response({"type": "unknown_role", "title": "Rol desconocido", "status": 400},
-                            status=400)
         if len(password) < 10:
             return Response(
                 {"type": "weak_password", "title": "La contraseña necesita 10 caracteres o más",
@@ -85,7 +97,9 @@ class UserCreateView(APIView):
             return Response({"type": "unknown_role", "title": "Rol desconocido", "status": 400},
                             status=400)
 
-        is_external = role_code == Role.EXTERNAL_INSPECTOR.value
+        # External is a behaviour, not a name: a company's "Contratista" built
+        # on external_inspector is external too.
+        is_external = (role.base_role or role.code) == Role.EXTERNAL_INSPECTOR.value
         user = User.objects.filter(email=email).first()
         if user is None:
             user = User.objects.create_user(
@@ -103,8 +117,14 @@ class UserCreateView(APIView):
                 status=409,
             )
 
-        Membership.objects.create(user=user, company_id=request.company_id, role=role,
-                                  is_default=True)
+        membership = Membership.objects.create(
+            user=user, company_id=request.company_id, role=role, is_default=True,
+            shift=_shift(request.data.get("shift")),
+        )
+        from modules.core.infrastructure.audit import record
+
+        record(request, "user.invited", object_type="user", object_id=user.id,
+               after={"email": user.email, "role": role.code, "shift": membership.shift})
         return Response({
             "id": user.id, "email": user.email, "full_name": user.get_full_name(),
             "initials": user.initials, "role": role.code, "role_name": role.name,
@@ -138,24 +158,43 @@ class UserDetailView(APIView):
         if membership is None:
             return Response({"type": "not_found", "status": 404}, status=404)
 
+        from modules.core.infrastructure.audit import record
+
+        before = {"role": membership.role.code, "shift": membership.shift,
+                  "is_active": membership.user.is_active}
+
         role_code = request.data.get("role")
         if role_code:
-            if role_code not in {role.value for role in Role}:
-                return Response({"type": "unknown_role", "status": 400}, status=400)
             # Locking yourself out of your own company is the classic footgun.
             if membership.user_id == request.user.id and role_code != membership.role.code:
                 raise PermissionDenied("No puedes cambiar tu propio rol")
+            # Any role this company has — the check against the seven shipped
+            # ones is what made every role the company created unassignable.
             role = RoleModel.objects.filter(company_id=request.company_id, code=role_code).first()
             if role is None:
                 return Response({"type": "unknown_role", "status": 400}, status=400)
             membership.role = role
             membership.save(update_fields=["role"])
+            membership.user.is_external = (
+                (role.base_role or role.code) == Role.EXTERNAL_INSPECTOR.value
+            )
+            membership.user.save(update_fields=["is_external"])
+
+        if "shift" in request.data:
+            membership.shift = _shift(request.data.get("shift"))
+            membership.save(update_fields=["shift"])
 
         if "is_active" in request.data:
             if membership.user_id == request.user.id:
                 raise PermissionDenied("No puedes desactivarte a ti mismo")
             membership.user.is_active = bool(request.data["is_active"])
             membership.user.save(update_fields=["is_active"])
+
+        after = {"role": membership.role.code, "shift": membership.shift,
+                 "is_active": membership.user.is_active}
+        if after != before:
+            record(request, "user.access_changed", object_type="user",
+                   object_id=membership.user_id, before=before, after=after)
 
         profile = {}
         for field in ("first_name", "last_name", "initials"):
@@ -180,17 +219,8 @@ class UserDetailView(APIView):
         if "area_restrictions" in request.data:
             _set_area_scope(membership, request.data["area_restrictions"])
 
-        return Response({
-            "id": membership.user_id,
-            "full_name": membership.user.get_full_name(),
-            "initials": membership.user.initials,
-            "role": membership.role.code,
-            "role_name": membership.role.name,
-            "is_active": membership.user.is_active,
-            "area_restrictions": [
-                ref for restriction in membership.restrictions.all() for ref in restriction.refs
-            ],
-        })
+        membership.refresh_from_db()
+        return Response(_member_payload(membership))
 
     def delete(self, request, user_id: int):
         """Removes access to this company, not the person.
@@ -240,3 +270,13 @@ class MyLanguageView(APIView):
         request.user.language = language
         request.user.save(update_fields=["language"])
         return Response({"language": language})
+
+
+def _shift(value) -> str:
+    """One of the three 8-hour relays, or none."""
+    value = (value or "").strip().upper()
+    if value and value not in {"A", "B", "C"}:
+        from rest_framework.exceptions import ValidationError
+
+        raise ValidationError("El turno debe ser A, B o C")
+    return value

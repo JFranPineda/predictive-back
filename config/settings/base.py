@@ -108,6 +108,10 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 50,
     "DEFAULT_FILTER_BACKENDS": ("django_filters.rest_framework.DjangoFilterBackend",),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # An eight-character code is only as strong as the guesses it allows.
+    # Ten a minute per address makes brute force take longer than the code
+    # lives; a technician who mistypes twice never notices the limit.
+    "DEFAULT_THROTTLE_RATES": {"code_login": "10/min"},
 }
 
 # Thirty minutes of inactivity, not thirty minutes of session.

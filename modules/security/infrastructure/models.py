@@ -37,6 +37,14 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
     mfa_enabled = models.BooleanField(default=False)
+    # A field technician signs in with a personal code, not an e-mail: three
+    # shifts share one tablet in the plant. Only a keyed digest is stored, so
+    # a copy of the database is not a list of working codes — and it is
+    # deterministic, which is what lets the login find the person by it.
+    access_code_digest = models.CharField(
+        max_length=64, null=True, blank=True, unique=True, editable=False
+    )
+    access_code_set_at = models.DateTimeField(null=True, blank=True)
 
     USERNAME_FIELD = "email"
     objects = UserManager()
@@ -65,6 +73,12 @@ class Role(TimeStampedModel):
     code = models.SlugField(max_length=40)
     name = models.CharField(max_length=80)
     permissions = models.ManyToManyField(Permission, related_name="roles", blank=True)
+    # How this role behaves towards field data, taken from one of the system
+    # roles. Permissions say what a role may touch; this says whose visits it
+    # may write. A "Gerente General" built on client_viewer reads the whole
+    # plant and can alter none of it, whatever permission is ticked by mistake.
+    base_role = models.CharField(max_length=40, blank=True)
+    description = models.CharField(max_length=240, blank=True)
 
     class Meta:
         unique_together = [("company", "code")]
@@ -75,6 +89,10 @@ class Membership(TimeStampedModel):
     company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name="memberships")
     role = models.ForeignKey(Role, on_delete=models.PROTECT, related_name="memberships")
     is_default = models.BooleanField(default=False)
+    # Three 8-hour relays. Belongs to the membership, not the person: the same
+    # technician can work the night shift at one plant and the day at another.
+    SHIFTS = [("A", "Turno A"), ("B", "Turno B"), ("C", "Turno C")]
+    shift = models.CharField(max_length=1, choices=SHIFTS, blank=True)
 
     class Meta:
         unique_together = [("user", "company")]

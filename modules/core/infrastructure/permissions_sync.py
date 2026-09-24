@@ -7,13 +7,29 @@ class DjangoPermissionSynchronizer:
     """Module manifests are the only place permissions are declared."""
 
     def sync(self, module: Manifest) -> None:
-        from modules.security.infrastructure.models import Permission
+        from django.db.models import Q
 
+        from modules.security.infrastructure.models import Permission, Role
+
+        created = []
         for code, description in module.permissions:
-            Permission.objects.update_or_create(
+            permission, is_new = Permission.objects.update_or_create(
                 code=code,
                 defaults={"module_code": module.code, "description": description},
             )
+            if is_new:
+                created.append(permission)
+
+        # The company administrator holds everything the installed modules
+        # declare. It was seeded with every permission once, so a permission
+        # declared later never reached it — nobody could then hand it out.
+        # Granted only on creation: an administrator who unticks one later
+        # keeps that choice on the next upgrade.
+        if created:
+            for role in Role.objects.filter(
+                Q(code="company_admin") | Q(base_role="company_admin")
+            ):
+                role.permissions.add(*created)
 
     def revoke(self, module_code: str) -> None:
         from modules.security.infrastructure.models import Permission

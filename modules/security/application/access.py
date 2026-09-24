@@ -78,7 +78,7 @@ def build_actor(user, company_id: int):
     Policies never see a Django user: that is what keeps the authorization
     rules in `security/domain/policies.py` readable and unit-testable.
     """
-    from modules.security.domain.actor import Actor, Role
+    from modules.security.domain.actor import Actor, Role, behaviour_of
     from modules.security.infrastructure.models import Membership
 
     if user.is_superuser:
@@ -101,7 +101,10 @@ def build_actor(user, company_id: int):
     return Actor(
         user_id=user.id,
         company_id=company_id,
-        role=Role(membership.role.code),
+        # `Role(code)` raised on every role a company made itself, so a user
+        # given "Gerente General" could not load a single screen.
+        role=behaviour_of(membership.role.base_role or membership.role.code),
+        role_code=membership.role.code,
         permissions=frozenset(p.code for p in membership.role.permissions.all() if p.is_active),
         area_ids=None if areas is None else frozenset(areas),
     )

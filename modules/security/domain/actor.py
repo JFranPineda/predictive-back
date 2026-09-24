@@ -22,6 +22,18 @@ class Role(StrEnum):
     CLIENT_VIEWER = "client_viewer"
 
 
+def behaviour_of(code: str | None) -> Role:
+    """The system behaviour a role code stands for.
+
+    An unknown code fails closed to the most restricted behaviour instead of
+    raising: a role nobody recognises must never be the one that can write.
+    """
+    try:
+        return Role(code or "")
+    except ValueError:
+        return Role.CLIENT_VIEWER
+
+
 @dataclass(frozen=True, slots=True)
 class Actor:
     user_id: int
@@ -31,6 +43,9 @@ class Actor:
     # None means "no area restriction". An empty frozenset means "no areas at
     # all", which is a different thing and must not collapse into "everything".
     area_ids: frozenset[int] | None = None
+    # The company's own name for the role ("jefe_mantenimiento"); `role` is the
+    # behaviour it borrows. Display and audit read this one.
+    role_code: str = ""
 
     def has(self, permission: str) -> bool:
         return permission in self.permissions

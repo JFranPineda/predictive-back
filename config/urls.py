@@ -5,10 +5,12 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from modules.core.infrastructure.routing import module_urlpatterns
+from modules.security.interfaces.code_views import CodeLoginView
 
 api_v1 = [
     path("auth/login/", TokenObtainPairView.as_view(), name="login"),
     path("auth/refresh/", TokenRefreshView.as_view(), name="refresh"),
+    path("auth/code-login/", CodeLoginView.as_view(), name="code-login"),
     *module_urlpatterns(),
 ]
 

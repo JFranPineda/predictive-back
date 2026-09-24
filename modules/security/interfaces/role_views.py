@@ -18,6 +18,13 @@ from modules.security.application.access import build_actor
 from modules.security.domain.actor import Role as RoleEnum
 from modules.security.models import Membership, Permission, Role
 
+# What a company-made role may borrow its behaviour from. Platform admin is
+# ours, not the customer's to hand out.
+BASES = (
+    "company_admin", "engineer", "planner", "technician",
+    "external_inspector", "client_viewer",
+)
+
 # The four things a user does to a record, as the request put it. Every
 # permission code ends in one of these, or it is something else entirely
 # (import, issue, recalculate) and shows up under "otros".
@@ -62,6 +69,8 @@ class RoleListView(RoleAdminView):
                     "code": role.code,
                     "name": role.name,
                     "is_system": role.code in {r.value for r in RoleEnum},
+                    "base_role": role.base_role or role.code,
+                    "description": role.description,
                     "member_count": Membership.objects.filter(role=role).count(),
                     "permissions": sorted(p.code for p in role.permissions.all()),
                 }
@@ -82,8 +91,17 @@ class RoleListView(RoleAdminView):
         if self.scoped(request).filter(code=code).exists():
             raise ValidationError(f"Ya existe un rol con el código '{code}'")
 
-        role = Role.objects.create(company_id=request.company_id, code=code, name=name)
+        role = Role.objects.create(
+            company_id=request.company_id, code=code, name=name,
+            base_role=_base(request.data.get("base_role")),
+            description=(request.data.get("description") or "").strip()[:240],
+        )
         _set_permissions(role, request.data.get("permissions"))
+        from modules.core.infrastructure.audit import record
+
+        record(request, "role.created", object_type="role", object_id=role.code,
+               after={"base_role": role.base_role,
+                      "permissions": sorted(p.code for p in role.permissions.all())})
         return Response({"id": role.id, "code": role.code, "name": role.name}, status=201)
 
 
@@ -94,10 +112,30 @@ class RoleDetailView(RoleAdminView):
         role = _get(self.scoped(request), role_id)
         if "name" in request.data:
             role.name = (request.data.get("name") or "").strip()
-            role.save(update_fields="name".split())
+            role.save(update_fields=["name"])
+        if "description" in request.data:
+            role.description = (request.data.get("description") or "").strip()[:240]
+            role.save(update_fields=["description"])
+        if "base_role" in request.data:
+            # A system role's behaviour is what the policies were written for;
+            # repointing one would silently change every account built on it.
+            if role.code in {r.value for r in RoleEnum}:
+                raise ValidationError("El comportamiento de un rol del sistema no se cambia")
+            role.base_role = _base(request.data["base_role"])
+            role.save(update_fields=["base_role"])
         if "permissions" in request.data:
             _assert_not_locking_yourself_out(request, role, request.data["permissions"])
+            before = sorted(p.code for p in role.permissions.all())
             _set_permissions(role, request.data["permissions"])
+            after = sorted(p.code for p in role.permissions.all())
+            if before != after:
+                from modules.core.infrastructure.audit import record
+
+                # Only the difference: sixty codes twice is a row nobody reads.
+                record(request, "role.permissions_changed", object_type="role",
+                       object_id=role.code,
+                       before={"removed": sorted(set(before) - set(after))},
+                       after={"added": sorted(set(after) - set(before))})
         return Response({
             "id": role.id,
             "code": role.code,
@@ -135,6 +173,15 @@ def _set_permissions(role: Role, codes) -> None:
     if unknown:
         raise ValidationError(f"Permisos desconocidos: {', '.join(sorted(unknown))}")
     role.permissions.set(permissions)
+
+
+def _base(value) -> str:
+    """Every company role must say how it behaves; the most restricted is the
+    default, so forgetting to choose never grants write access."""
+    value = (value or "client_viewer").strip()
+    if value not in BASES:
+        raise ValidationError(f"Comportamiento desconocido: {value}")
+    return value
 
 
 def _action_of(code: str) -> str:
