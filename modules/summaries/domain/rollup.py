@@ -43,6 +43,13 @@ class Driver:
     higher_is_worse: bool
     equipment_id: int
     equipment_tag: str
+    # Who took it and when. A manager looking at a red area asks "since when,
+    # and who saw it" before anything else; the board has to answer without
+    # anyone being able to change the answer. Two times, because they differ:
+    # a round measured in the plant is often typed in at the office later.
+    recorded_by: str = ""
+    recorded_at: str | None = None
+    measured_at: str | None = None
 
 
 def worst_driver(drivers: list[Driver]) -> Driver | None:

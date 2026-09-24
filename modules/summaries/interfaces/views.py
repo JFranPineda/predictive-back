@@ -157,11 +157,18 @@ def _drivers(company_id: int, equipments: list, days: int) -> dict:
             "magnitude__higher_is_worse",
             "value",
             "condition_status__severity",
+            "operator__first_name",
+            "operator__last_name",
+            "taken_at",
+            "created_at",
         )
     )
 
     best: dict[tuple[int, str], tuple[tuple[int, int], Driver]] = {}
-    for equipment_id, technique, magnitude, unit, higher, value, severity in rows:
+    for (
+        equipment_id, technique, magnitude, unit, higher, value, severity,
+        first_name, last_name, taken_at, created_at,
+    ) in rows:
         key = (equipment_id, technique)
         # A headline reading outranks any other, however alarming the other
         # looks: 16 dB of friction is not what decides a roll's thickness.
@@ -174,6 +181,9 @@ def _drivers(company_id: int, equipments: list, days: int) -> dict:
             higher_is_worse=higher,
             equipment_id=equipment_id,
             equipment_tag=tags[equipment_id],
+            recorded_by=f"{first_name or ''} {last_name or ''}".strip(),
+            recorded_at=created_at.isoformat() if created_at else None,
+            measured_at=taken_at.isoformat() if taken_at else None,
         )
         if current is None or rank > current[0] or (
             rank == current[0] and _beats(candidate, current[1])
@@ -251,6 +261,9 @@ def _driver_payload(driver) -> dict | None:
         "higher_is_worse": driver.higher_is_worse,
         "equipment_id": driver.equipment_id,
         "equipment_tag": driver.equipment_tag,
+        "recorded_by": driver.recorded_by,
+        "recorded_at": driver.recorded_at,
+        "measured_at": driver.measured_at,
     }
 
 
