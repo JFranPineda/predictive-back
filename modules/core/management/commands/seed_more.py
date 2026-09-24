@@ -183,7 +183,9 @@ class Command(BaseCommand):
         unit, _ = Unit.objects.get_or_create(
             code="mm", defaults={"name": "Milímetros", "translations": {"name": {"es": "Milímetros"}}}
         )
-        technique = Technique.objects.filter(code="ultrasound").first()
+        # Its own service: a contact-probe thickness sweep is a non-destructive
+        # test in millimetres, not a reading of the dB ultrasound round.
+        technique = Technique.objects.filter(code="ndt_thickness").first()
         if technique is None:
             return
         Magnitude.objects.update_or_create(

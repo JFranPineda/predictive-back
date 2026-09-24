@@ -18,10 +18,10 @@ class Unit(TranslatableModel):
 class Technique(TranslatableModel):
     code = models.SlugField(max_length=30, unique=True)
     name = models.CharField(max_length=80)
-    # Which of its magnitudes the plant view prints beside the bar. An
-    # ultrasound round reports both a dB level and a wall thickness, and the
-    # headline of that report is the thickness — the number that decides
-    # whether the roll keeps turning.
+    # Which of its magnitudes the plant view prints beside the bar, in that
+    # service's own unit: decibels for ultrasound, mm/s for vibration. A
+    # technique with several magnitudes still has one number that explains
+    # its colour.
     headline_magnitude = models.SlugField(max_length=40, blank=True)
     module_code = models.SlugField(max_length=60)
 
