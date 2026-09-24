@@ -79,6 +79,16 @@ class VisitCaptureView(APIView):
             operator_id=request.user.id,
             idempotency_key=request.headers.get("Idempotency-Key") or None,
         )
+        from modules.core.infrastructure.audit import record
+
+        record(
+            request, "reading.captured", object_type="visit", object_id=visit.id,
+            after={
+                "readings": len(recorded),
+                "worst": _worst(recorded),
+                "equipment": visit.equipment.client_tag or visit.equipment.asset_code,
+            },
+        )
         return Response({
             "recorded": len(recorded),
             "readings": [
@@ -134,3 +144,10 @@ def _reference(visit: ServiceVisit) -> VisitRef:
         report_issued=False,
         visited_on=visit.visited_at.date() if visit.visited_at else None,
     )
+
+
+def _worst(recorded) -> str | None:
+    """The verdict the round produced, for the audit line a manager scans."""
+    rank = {"operational": 1, "alarm": 2, "shutdown": 3}
+    codes = [row.condition_status for row in recorded if row.condition_status]
+    return max(codes, key=lambda code: rank.get(code, 0)) if codes else None

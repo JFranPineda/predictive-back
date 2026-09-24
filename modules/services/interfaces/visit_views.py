@@ -175,14 +175,30 @@ class VisitReadingsView(APIView):
                 "point__equipment__asset_group__kind",
             )
         )
+        from modules.core.infrastructure.audit import record
+
         saved = 0
         for reading in readings:
             raw = updates[reading.id]
+            before = {
+                "value": None if reading.value is None else str(reading.value),
+                "status": reading.condition_status.code if reading.condition_status else None,
+            }
             reading.value = _decimal(raw)
             reading.quality = "ok" if reading.value is not None else "not_measured"
             reading.condition_status = _evaluate(request.company_id, reading)
-            reading.operator = request.user
-            reading.save(update_fields=["value", "quality", "condition_status", "operator", "updated_at"])
+            # `operator` is who took the measurement and stays so. Overwriting
+            # it with whoever corrected the value erased the technician the
+            # managers' board is meant to show; the correction is recorded in
+            # the audit trail instead, with its own author.
+            reading.save(update_fields=["value", "quality", "condition_status", "updated_at"])
+            after = {
+                "value": None if reading.value is None else str(reading.value),
+                "status": reading.condition_status.code if reading.condition_status else None,
+            }
+            if after != before:
+                record(request, "reading.corrected", object_type="reading",
+                       object_id=reading.id, before=before, after=after)
             saved += 1
         return Response({"saved": saved})
 
