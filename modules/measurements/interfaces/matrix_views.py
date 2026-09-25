@@ -17,13 +17,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.assets.models import Equipment
+from modules.measurements.domain.axes import axis_rank
 from modules.measurements.domain.magnitude_order import block_sort_key
 from modules.measurements.models import Reading
 from modules.security.application.access import build_actor
 from modules.security.domain.policies import VisitRef, can_edit_visit
-
-# The order the analyst reads the axes in: horizontal, vertical, axial.
-AXIS_ORDER = {"H": 0, "V": 1, "A": 2}
 
 # The order the sheet prints them in.
 SIDE_ORDER = {
@@ -188,6 +186,8 @@ def build_matrix(request, equipment: Equipment, scope: str) -> dict:
             "value": str(reading.value) if reading.value is not None else None,
             "status_code": reading.condition_status.code if reading.condition_status else None,
             "status_color": reading.condition_status.color if reading.condition_status else None,
+            # A value no standard judged: shown as "sin norma", not as healthy.
+            "graded": reading.condition_status_id is not None or reading.threshold_set_id is not None,
             "quality": reading.quality,
             "visit_id": reading.service_visit_id,
         }
@@ -223,7 +223,7 @@ def build_matrix(request, equipment: Equipment, scope: str) -> dict:
                         row["component_id"],
                         SIDE_ORDER.get(row["side"], 9),
                         row["number"],
-                        AXIS_ORDER.get(row["axis"], 9),
+                        axis_rank(row["axis"]),
                     ),
                 ),
             }

@@ -16,6 +16,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.diagnostics.models import EquipmentLogEntry
+from modules.measurements.domain.axes import axis_rank
 from modules.measurements.models import Reading
 from modules.security.application.access import build_actor
 from modules.security.domain.policies import can_edit_visit, can_write_log_entry
@@ -74,6 +75,7 @@ class VisitDetailView(APIView):
                 "decimals": reading.magnitude.decimals,
                 "aggregation": reading.aggregation,
                 "status": _status(reading.condition_status, language),
+                "graded": reading.condition_status_id is not None or reading.threshold_set_id is not None,
                 "quality": reading.quality,
                 "not_measured_reason": reading.not_measured_reason or None,
             })
@@ -113,7 +115,7 @@ class VisitDetailView(APIView):
                 }
                 for p in visit.participants.all()
             ],
-            "points": sorted(points.values(), key=lambda p: (p["number"], p["axis"])),
+            "points": sorted(points.values(), key=lambda p: (p["number"], axis_rank(p["axis"]))),
             "entries": [
                 {
                     "id": entry.id,

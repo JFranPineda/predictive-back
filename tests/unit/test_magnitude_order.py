@@ -16,3 +16,9 @@ def test_an_unlisted_magnitude_goes_last():
 
 def test_ties_break_on_the_block_key():
     assert block_sort_key(30, "env_accel:peak") < block_sort_key(30, "env_accel:peak_to_peak")
+
+
+def test_axes_read_horizontal_vertical_axial():
+    from modules.measurements.domain.axes import axis_rank
+
+    assert sorted(["A", "H", "V", "N"], key=axis_rank) == ["H", "V", "A", "N"]
