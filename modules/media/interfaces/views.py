@@ -9,19 +9,21 @@ visit, and each keeps what it is in `kind`.
 from __future__ import annotations
 
 import io
+from dataclasses import dataclass
 
+from django.db.models import Count
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from django.db.models import Count
-
+from modules.core.infrastructure.audit import record
 from modules.media.domain.derivatives import Variant, storage_key
 from modules.media.infrastructure.local_store import checksum, store
 from modules.media.models import MediaAsset
 from modules.security.application.access import build_actor
+from modules.security.domain.policies import MediaRef, can_delete_media, can_edit_media
 
 ACCEPTED = {
     "jpg": "jpeg", "jpeg": "jpeg", "png": "png", "heic": "heic", "heif": "heic",
@@ -54,8 +56,9 @@ class MediaCollectionView(APIView):
             queryset = queryset.filter(kind=request.query_params["kind"])
         rows, next_cursor = _page(queryset, request)
         backend = store()
+        rights = _rights(request, rows)
         return Response({
-            "items": [_payload(row, backend) for row in rows],
+            "items": [_payload(row, backend, rights) for row in rows],
             "next_cursor": next_cursor,
         })
 
@@ -82,7 +85,7 @@ class MediaCollectionView(APIView):
             checksum_sha256=digest
         ).first()
         if existing is not None:
-            return Response(_payload(existing), status=200)
+            return Response(_payload(existing, rights=_rights(request, [existing])), status=200)
 
         backend = store()
         key = storage_key(request.company_id, digest, None, extension)
@@ -104,7 +107,7 @@ class MediaCollectionView(APIView):
                          int(request.data.get("owner_id") or 0)),
         )
         _make_thumbnail(asset, payload, backend)
-        return Response(_payload(asset), status=201)
+        return Response(_payload(asset, rights=_rights(request, [asset])), status=201)
 
 
 class MediaDetailView(APIView):
@@ -112,16 +115,20 @@ class MediaDetailView(APIView):
 
     def patch(self, request, media_id: int):
         asset = _get(request, media_id)
+        rights = _rights(request, [asset])
+        if not rights[asset.id].edit:
+            raise PermissionDenied("No puedes editar este archivo")
         if "caption" in request.data:
             asset.caption = (request.data.get("caption") or "").strip()[:300]
             asset.save(update_fields=["caption", "updated_at"])
-        return Response(_payload(asset))
+        return Response(_payload(asset, rights=rights))
 
     def delete(self, request, media_id: int):
-        actor = build_actor(request.user, request.company_id)
-        if not actor.has("media.delete"):
-            raise PermissionDenied("Falta el permiso media.delete")
         asset = _get(request, media_id)
+        if not _rights(request, [asset])[asset.id].delete:
+            raise PermissionDenied(
+                "Solo quien subió el archivo puede quitarlo, y mientras la visita siga abierta"
+            )
         backend = store()
         for key in [asset.original_key, *(d.get("key") for d in asset.derivatives.values())]:
             if key:
@@ -131,6 +138,11 @@ class MediaDetailView(APIView):
                     # The row is what the app reads; a missing file must not
                     # leave an undeletable record behind.
                     pass
+        record(
+            request, "media.deleted", object_type="media", object_id=asset.id,
+            before={"kind": asset.kind, "owner_type": asset.owner_type,
+                    "owner_id": asset.owner_id, "caption": asset.caption},
+        )
         asset.delete()
         return Response(status=204)
 
@@ -174,9 +186,45 @@ def _make_thumbnail(asset: MediaAsset, payload: bytes, backend) -> None:
     asset.save(update_fields=["derivatives", "width", "height", "processing_state", "updated_at"])
 
 
-def _payload(asset: MediaAsset, backend=None) -> dict:
+@dataclass(frozen=True, slots=True)
+class _Rights:
+    edit: bool
+    delete: bool
+
+
+_NO_RIGHTS = _Rights(edit=False, delete=False)
+
+
+def _rights(request, rows) -> dict[int, _Rights]:
+    """What the current user may do with each file of a page.
+
+    The server decides and the payload says so: the gallery used to show the
+    delete button to anyone who could edit the visit, and the server then
+    refused them with a 403 nobody saw.
+    """
+    from modules.services.infrastructure.visit_refs import visit_refs
+
+    actor = build_actor(request.user, request.company_id)
+    visits = visit_refs(
+        request.company_id,
+        (row.owner_id for row in rows if row.owner_type == "visit"),
+    )
+    rights = {}
+    for row in rows:
+        media = MediaRef(
+            uploaded_by_id=row.uploaded_by_id,
+            visit=visits.get(row.owner_id) if row.owner_type == "visit" else None,
+        )
+        rights[row.id] = _Rights(
+            edit=can_edit_media(actor, media), delete=can_delete_media(actor, media)
+        )
+    return rights
+
+
+def _payload(asset: MediaAsset, backend=None, rights: dict[int, _Rights] | None = None) -> dict:
     backend = backend or store()
     thumb = (asset.derivatives or {}).get("thumb", {}).get("key")
+    allowed = (rights or {}).get(asset.id, _NO_RIGHTS)
     return {
         "id": asset.id,
         "kind": asset.kind,
@@ -192,6 +240,8 @@ def _payload(asset: MediaAsset, backend=None) -> dict:
         "state": asset.processing_state,
         "uploaded_by": asset.uploaded_by.get_full_name() if asset.uploaded_by else "",
         "created_at": asset.created_at.isoformat(),
+        "can_edit": allowed.edit,
+        "can_delete": allowed.delete,
     }
 
 
@@ -266,9 +316,10 @@ class EquipmentMediaView(APIView):
         rows, next_cursor = _page(queryset, request)
         backend = store()
         visits = _visits_of(rows)
+        rights = _rights(request, rows)
         body = {
             "items": [
-                {**_payload(row, backend), "visit": visits.get(row.owner_id)}
+                {**_payload(row, backend, rights), "visit": visits.get(row.owner_id)}
                 for row in rows
             ],
             "next_cursor": next_cursor,

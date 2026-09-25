@@ -24,7 +24,7 @@ class OperatingParameter(TenantModel, TranslatableModel):
     is_cumulative = models.BooleanField(
         default=False, help_text="Running hours only grow; a drop means it was reset"
     )
-    decimals = models.PositiveSmallIntegerField(default=1)
+    decimals = models.PositiveSmallIntegerField(default=0)
     order = models.PositiveSmallIntegerField(default=0)
     is_active = models.BooleanField(default=True)
 

@@ -7,10 +7,15 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from modules.diagnostics.domain.other_fault import (
+    OtherFaultWithoutDescriptionError,
+    other_fault_text,
+)
 from modules.diagnostics.models import FaultMode
 from modules.security.application.access import build_actor
 from modules.security.domain.policies import can_write_log_entry
-from modules.services.interfaces.visit_views import _load, _reference
+from modules.services.infrastructure.visit_refs import visit_ref
+from modules.services.interfaces.visit_views import _load
 
 
 class FaultModeListView(APIView):
@@ -124,7 +129,7 @@ class VisitFaultsView(APIView):
     def put(self, request, visit_id: int):
         visit = _load(request, visit_id)
         actor = build_actor(request.user, request.company_id)
-        if not can_write_log_entry(actor, _reference(visit)):
+        if not can_write_log_entry(actor, visit_ref(visit)):
             raise PermissionDenied("Esta visita no es tuya o ya está cerrada")
 
         codes = list(request.data.get("codes") or [])
@@ -145,8 +150,47 @@ class VisitFaultsView(APIView):
         if unknown:
             raise ValidationError(f"Modos de falla desconocidos: {', '.join(sorted(unknown))}")
 
+        try:
+            other = other_fault_text(request.data.get("other") is not None, request.data.get("other"))
+        except OtherFaultWithoutDescriptionError as cause:
+            raise ValidationError(str(cause)) from cause
+
         visit.fault_modes.set(faults)
-        return Response({"codes": sorted(fault.code for fault in faults)})
+        visit.other_fault = other
+        visit.save(update_fields=["other_fault"])
+        return Response({"codes": sorted(fault.code for fault in faults), "other": other or None})
+
+
+class OtherFaultsView(APIView):
+    """What was written under "Otros", newest first: the list the catalogue
+    grows from."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from modules.services.models import ServiceVisit
+
+        language = getattr(request, "language", "es")
+        visits = (
+            ServiceVisit.objects.for_company(request.company_id)
+            .exclude(other_fault="")
+            .select_related("service_order__technique", "equipment__asset_group")
+            .order_by("-visited_at")
+        )
+        if request.query_params.get("technique"):
+            visits = visits.filter(service_order__technique__code=request.query_params["technique"])
+        return Response([
+            {
+                "visit_id": visit.id,
+                "visited_at": visit.visited_at.isoformat(),
+                "technique_code": visit.service_order.technique.code,
+                "technique_name": visit.service_order.technique.translated("name", language),
+                "group_name": visit.equipment.asset_group.name,
+                "equipment_name": visit.equipment.name,
+                "description": visit.other_fault,
+            }
+            for visit in visits[:100]
+        ])
 
 
 def _slug(value: str) -> str:

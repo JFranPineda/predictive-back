@@ -18,21 +18,9 @@ from rest_framework.views import APIView
 from modules.diagnostics.models import EquipmentLogEntry
 from modules.measurements.models import Reading
 from modules.security.application.access import build_actor
-from modules.security.domain.policies import VisitRef, can_edit_visit, can_write_log_entry
+from modules.security.domain.policies import can_edit_visit, can_write_log_entry
+from modules.services.infrastructure.visit_refs import visit_ref
 from modules.services.models import ServiceVisit
-
-
-def _reference(visit: ServiceVisit) -> VisitRef:
-    participants = list(visit.participants.all())
-    return VisitRef(
-        id=visit.id,
-        area_id=visit.equipment.asset_group.sector.area_id,
-        participant_ids=frozenset(p.user_id for p in participants),
-        lead_analyst_id=next((p.user_id for p in participants if p.role == "lead_analyst"), None),
-        is_closed=visit.is_closed,
-        report_issued=False,
-        visited_on=visit.visited_at.date(),
-    )
 
 
 def _load(request, visit_id: int) -> ServiceVisit:
@@ -56,7 +44,7 @@ class VisitDetailView(APIView):
         language = getattr(request, "language", "es")
         visit = _load(request, visit_id)
         actor = build_actor(request.user, request.company_id)
-        reference = _reference(visit)
+        reference = visit_ref(visit)
         equipment = visit.equipment
         area = equipment.asset_group.sector.area
 
@@ -144,6 +132,7 @@ class VisitDetailView(APIView):
                  "reference": fault.iso_reference}
                 for fault in visit.fault_modes.all()
             ],
+            "other_fault": visit.other_fault or None,
             "is_closed": visit.is_closed,
             "report_issued": False,
             "can_edit": can_edit_visit(actor, reference),
@@ -160,7 +149,7 @@ class VisitReadingsView(APIView):
     def patch(self, request, visit_id: int):
         visit = _load(request, visit_id)
         actor = build_actor(request.user, request.company_id)
-        if not can_edit_visit(actor, _reference(visit)):
+        if not can_edit_visit(actor, visit_ref(visit)):
             raise PermissionDenied("Esta visita no es tuya o ya está cerrada")
 
         updates = {int(row["reading_id"]): row.get("value") for row in request.data.get("readings", [])}
@@ -211,7 +200,7 @@ class VisitEntriesView(APIView):
     def post(self, request, visit_id: int):
         visit = _load(request, visit_id)
         actor = build_actor(request.user, request.company_id)
-        if not can_write_log_entry(actor, _reference(visit)):
+        if not can_write_log_entry(actor, visit_ref(visit)):
             raise PermissionDenied("Esta visita no es tuya o ya está cerrada")
 
         entry = EquipmentLogEntry.objects.create(

@@ -15,12 +15,20 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.assets.models import Equipment
+from modules.core.infrastructure.audit import record
 from modules.diagnostics.models import EquipmentLogEntry
 from modules.measurements.models import Instrument, Magnitude, Technique
 from modules.security.application.access import build_actor
-from modules.security.domain.policies import can_edit_visit, can_write_log_entry
-from modules.services.interfaces.visit_views import _load, _reference
-from modules.services.models import ServiceOrder, ServiceVisit, VisitParticipant
+from modules.security.domain.policies import (
+    can_change_order_status,
+    can_edit_visit,
+    can_write_log_entry,
+)
+from modules.services.domain.order_status import CANCELLED, PLANNED, can_transition
+from modules.services.infrastructure.order_queries import analysts_of
+from modules.services.infrastructure.visit_refs import visit_ref
+from modules.services.interfaces.visit_views import _load
+from modules.services.models import ServiceOrder, ServiceProvider, ServiceVisit, VisitParticipant
 
 PARTICIPANT_ROLES = ("lead_analyst", "assistant", "supervisor", "client_witness")
 
@@ -59,25 +67,37 @@ class ServiceOrderAdminView(ServiceAdminView):
             client_work_order=(request.data.get("client_work_order") or "").strip(),
             scheduled_from=request.data.get("scheduled_from") or timezone.now().date(),
             scheduled_to=request.data.get("scheduled_to") or timezone.now().date(),
-            status=request.data.get("status") or "planned",
-            lead_analyst_id=request.data.get("lead_analyst") or None,
+            # A new order starts planned; moving it on is the administrator's.
+            status=PLANNED,
+            provider=_provider(request, request.data.get("provider")),
+            lead_analyst_id=_analyst(request, request.data.get("lead_analyst")),
             supervisor_id=request.data.get("supervisor") or None,
         )
         return Response({"id": order.id, "code": order.code}, status=201)
 
 
 class ServiceOrderDetailView(ServiceAdminView):
+    """Plant and technique are what every visit of the round hangs off, so they
+    are never changed here; the form shows them locked."""
+
+    @transaction.atomic
     def patch(self, request, order_id: int):
         self.require(request, "services.manage_order")
         order = _find(ServiceOrder.objects.for_company(request.company_id), order_id, "orden")
-        for field in ("code", "client_work_order", "status"):
+        for field in ("code", "client_work_order"):
             if field in request.data:
                 setattr(order, field, (request.data.get(field) or "").strip())
+        if not order.code:
+            raise ValidationError("El código es obligatorio")
         for field in ("scheduled_from", "scheduled_to"):
             if request.data.get(field):
                 setattr(order, field, request.data[field])
+        if "provider" in request.data:
+            order.provider = _provider(request, request.data["provider"])
         if "lead_analyst" in request.data:
-            order.lead_analyst_id = request.data["lead_analyst"] or None
+            order.lead_analyst_id = _analyst(request, request.data["lead_analyst"])
+        if "status" in request.data and request.data["status"] != order.status:
+            self._change_status(request, order, request.data["status"])
         order.save()
         return Response({"id": order.id, "code": order.code, "status": order.status})
 
@@ -85,12 +105,40 @@ class ServiceOrderDetailView(ServiceAdminView):
         self.require(request, "services.manage_order")
         order = _find(ServiceOrder.objects.for_company(request.company_id), order_id, "orden")
         if order.visits.exists():
-            # Cancelling keeps the visits and their readings readable.
-            order.status = "cancelled"
-            order.save(update_fields=["status"])
-            return Response({"id": order.id, "status": "cancelled", "cancelled": True})
+            # Cancelling keeps the visits and their readings readable; it is a
+            # change of status like any other.
+            with transaction.atomic():
+                self._change_status(request, order, CANCELLED)
+                order.save(update_fields=["status"])
+            return Response({"id": order.id, "status": CANCELLED, "cancelled": True})
         order.delete()
         return Response(status=204)
+
+    def _change_status(self, request, order: ServiceOrder, target: str) -> None:
+        if not can_change_order_status(self.actor(request)):
+            raise PermissionDenied("Solo el administrador cambia el estado de una orden")
+        if not can_transition(order.status, target):
+            raise ValidationError(f"Una orden {order.get_status_display().lower()} no pasa a ese estado")
+        record(request, "service_order.status", object_type="service_order", object_id=order.id,
+               before={"status": order.status}, after={"status": target})
+        order.status = target
+
+
+def _provider(request, provider_id) -> ServiceProvider | None:
+    if not provider_id:
+        return None
+    provider = ServiceProvider.objects.for_company(request.company_id).filter(id=provider_id).first()
+    if provider is None:
+        raise ValidationError("Esa empresa no existe")
+    return provider
+
+
+def _analyst(request, user_id) -> int | None:
+    if not user_id:
+        return None
+    if int(user_id) not in {row["id"] for row in analysts_of(request.company_id)}:
+        raise ValidationError("El analista debe ser un ingeniero de la compañía")
+    return int(user_id)
 
 
 class VisitCollectionView(ServiceAdminView):
@@ -135,7 +183,7 @@ class VisitAdminView(ServiceAdminView):
     def patch(self, request, visit_id: int):
         visit = _load(request, visit_id)
         actor = self.actor(request)
-        if not can_edit_visit(actor, _reference(visit)):
+        if not can_edit_visit(actor, visit_ref(visit)):
             raise PermissionDenied("Esta visita no es tuya o ya está cerrada")
 
         if request.data.get("visited_at"):
@@ -172,7 +220,7 @@ class VisitAdminView(ServiceAdminView):
 class VisitParticipantView(ServiceAdminView):
     def post(self, request, visit_id: int):
         visit = _load(request, visit_id)
-        if not can_edit_visit(self.actor(request), _reference(visit)):
+        if not can_edit_visit(self.actor(request), visit_ref(visit)):
             raise PermissionDenied("Esta visita no es tuya o ya está cerrada")
         role = request.data.get("role") or "assistant"
         if role not in PARTICIPANT_ROLES:
@@ -187,7 +235,7 @@ class VisitParticipantView(ServiceAdminView):
 
     def delete(self, request, visit_id: int):
         visit = _load(request, visit_id)
-        if not can_edit_visit(self.actor(request), _reference(visit)):
+        if not can_edit_visit(self.actor(request), visit_ref(visit)):
             raise PermissionDenied("Esta visita no es tuya o ya está cerrada")
         if visit.participants.count() <= 1:
             # A visit with nobody on it can never be edited again.
@@ -234,7 +282,7 @@ class LogEntryDetailView(ServiceAdminView):
                 raise PermissionDenied("Esa anotación no pertenece a una visita")
             return
         visit = _load(request, entry.service_visit_id)
-        if not can_write_log_entry(actor, _reference(visit)):
+        if not can_write_log_entry(actor, visit_ref(visit)):
             raise PermissionDenied("Esta visita no es tuya o ya está cerrada")
         if entry.author_id not in (None, request.user.id) and not actor.has(
             "diagnostics.close_recommendation"

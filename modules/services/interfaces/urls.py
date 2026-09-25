@@ -8,7 +8,13 @@ from modules.services.interfaces.admin_views import (
     VisitCollectionView,
     VisitParticipantView,
 )
-from modules.services.interfaces.views import AuthorshipView, ServiceOrderListView
+from modules.services.interfaces.order_views import (
+    AnalystListView,
+    ServiceOrderListView,
+    ServiceProviderDetailView,
+    ServiceProviderView,
+)
+from modules.services.interfaces.views import AuthorshipView
 from modules.services.interfaces.visit_views import (
     VisitDetailView,
     VisitEntriesView,
@@ -18,6 +24,10 @@ from modules.services.interfaces.visit_views import (
 urlpatterns = [
     path("service-orders/", ServiceOrderListView.as_view(), name="service-orders"),
     path("service-orders/new/", ServiceOrderAdminView.as_view(), name="service-order-create"),
+    path("service-orders/analysts/", AnalystListView.as_view(), name="service-order-analysts"),
+    path("service-providers/", ServiceProviderView.as_view(), name="service-providers"),
+    path("service-providers/<int:provider_id>/", ServiceProviderDetailView.as_view(),
+         name="service-provider-detail"),
     path("service-orders/<int:order_id>/", ServiceOrderDetailView.as_view(), name="service-order-detail"),
     path("service-visits/", VisitCollectionView.as_view(), name="visit-create"),
     path("service-visits/authorship/", AuthorshipView.as_view(), name="visit-authorship"),

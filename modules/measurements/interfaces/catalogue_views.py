@@ -13,6 +13,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.core.domain.i18n import SUPPORTED_LANGUAGES
+from modules.measurements.domain.magnitude_order import display_order_for
 from modules.measurements.models import Magnitude, Technique, Unit
 from modules.security.application.access import build_actor
 
@@ -89,7 +90,9 @@ class MagnitudeListView(APIView):
 
     def get(self, request):
         language = getattr(request, "language", "es")
-        queryset = Magnitude.objects.select_related("technique", "default_unit").order_by("code")
+        queryset = Magnitude.objects.select_related("technique", "default_unit").order_by(
+            "display_order", "code"
+        )
         if request.query_params.get("technique"):
             queryset = queryset.filter(technique__code=request.query_params["technique"])
         return Response([_payload(row, language) for row in queryset])
@@ -127,6 +130,7 @@ class MagnitudeListView(APIView):
             default_unit=unit,
             default_aggregation=aggregation,
             decimals=int(request.data.get("decimals") or 2),
+            display_order=int(request.data.get("display_order") or display_order_for(code)),
             higher_is_worse=bool(request.data.get("higher_is_worse", True)),
             translations={"name": _names(request.data, name)},
         )
@@ -135,6 +139,7 @@ class MagnitudeListView(APIView):
 
 def _payload(row: Magnitude, language: str) -> dict:
     return {
+        "id": row.id,
         "code": row.code,
         "name": row.translated("name", language),
         "names": row.translations.get("name") or {},
@@ -143,6 +148,7 @@ def _payload(row: Magnitude, language: str) -> dict:
         "unit_code": row.default_unit.code,
         "aggregation": row.default_aggregation,
         "decimals": row.decimals,
+        "display_order": row.display_order,
         # Viscosity and dielectric strength get worse as they drop, unlike
         # every vibration magnitude.
         "higher_is_worse": row.higher_is_worse,
@@ -259,6 +265,8 @@ class MagnitudeDetailView(APIView):
             magnitude.higher_is_worse = bool(request.data["higher_is_worse"])
         if "decimals" in request.data:
             magnitude.decimals = max(int(request.data["decimals"] or 0), 0)
+        if "display_order" in request.data:
+            magnitude.display_order = max(int(request.data["display_order"] or 0), 0)
         magnitude.save()
         language = getattr(request, "language", "es")
         return Response({
@@ -269,6 +277,7 @@ class MagnitudeDetailView(APIView):
             "default_aggregation": magnitude.default_aggregation,
             "higher_is_worse": magnitude.higher_is_worse,
             "decimals": magnitude.decimals,
+            "display_order": magnitude.display_order,
         })
 
     def delete(self, request, magnitude_id: int):

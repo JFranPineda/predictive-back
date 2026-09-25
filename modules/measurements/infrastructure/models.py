@@ -38,6 +38,9 @@ class Magnitude(TranslatableModel):
     default_aggregation = models.CharField(max_length=20, default="rms")
     higher_is_worse = models.BooleanField(default=True)
     decimals = models.PositiveSmallIntegerField(default=2)
+    # Where its table sits in the record of values: velocity before envelope
+    # before temperature, as the customer's sheet prints them.
+    display_order = models.PositiveSmallIntegerField(default=900)
     # Velocity is read on three axes of a bearing; the envelope, the
     # temperature of the housing and an ultrasound level are read once on it.
     # Writing them three times is what filled the record of values with rows

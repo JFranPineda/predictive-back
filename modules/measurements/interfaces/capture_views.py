@@ -26,7 +26,8 @@ from modules.measurements.infrastructure.repositories import (
     DjangoReadingRepository,
 )
 from modules.security.application.access import build_actor
-from modules.security.domain.policies import VisitRef, can_record_reading
+from modules.security.domain.policies import can_record_reading
+from modules.services.infrastructure.visit_refs import visit_ref
 from modules.services.models import ServiceVisit
 from modules.thresholds.infrastructure.repositories import DjangoThresholdRepository
 
@@ -55,7 +56,7 @@ class VisitCaptureView(APIView):
             return Response({"type": "not_found", "status": 404}, status=404)
 
         actor = build_actor(request.user, request.company_id)
-        if not can_record_reading(actor, _reference(visit)):
+        if not can_record_reading(actor, visit_ref(visit)):
             raise PermissionDenied("No puedes registrar lecturas en esta visita")
 
         rows = request.data.get("readings") or []
@@ -129,21 +130,6 @@ def _decimal(value) -> Decimal | None:
         return Decimal(str(value))
     except InvalidOperation as cause:
         raise ValidationError(f"Valor no numérico: {value}") from cause
-
-
-def _reference(visit: ServiceVisit) -> VisitRef:
-    participants = list(visit.participants.all())
-    return VisitRef(
-        id=visit.id,
-        area_id=visit.equipment.asset_group.sector.area_id,
-        participant_ids=frozenset(row.user_id for row in participants),
-        lead_analyst_id=next(
-            (row.user_id for row in participants if row.role == "lead_analyst"), None
-        ),
-        is_closed=visit.is_closed,
-        report_issued=False,
-        visited_on=visit.visited_at.date() if visit.visited_at else None,
-    )
 
 
 def _worst(recorded) -> str | None:

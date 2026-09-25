@@ -28,6 +28,25 @@ class PlanLine(TenantModel):
     planned_mandays = models.DecimalField(max_digits=6, decimal_places=1, default=0)
 
 
+class ServiceProvider(TenantModel):
+    """The company that executes a service: 1A-MIG, or a contractor.
+
+    The ledger showed the analyst in its place; the customer reads orders by
+    who did the work, and the analyst is a person inside that company.
+    """
+
+    name = models.CharField(max_length=120)
+    tax_id = models.CharField(max_length=20, blank=True, help_text="RUC")
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        unique_together = [("company", "name")]
+        ordering = ["name"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
 class ServiceOrder(TenantModel):
     STATUSES = [("planned", "Programada"), ("in_progress", "En ejecución"),
                 ("done", "Ejecutada"), ("cancelled", "Anulada")]
@@ -44,6 +63,9 @@ class ServiceOrder(TenantModel):
     scheduled_from = models.DateField()
     scheduled_to = models.DateField()
     status = models.CharField(max_length=20, choices=STATUSES, default="planned")
+    provider = models.ForeignKey(
+        ServiceProvider, on_delete=models.PROTECT, null=True, blank=True, related_name="orders"
+    )
     lead_analyst = models.ForeignKey("security.User", on_delete=models.SET_NULL, null=True, related_name="+")
     supervisor = models.ForeignKey("security.User", on_delete=models.SET_NULL, null=True, related_name="+")
 
@@ -73,6 +95,8 @@ class ServiceVisit(TenantModel):
     fault_modes = models.ManyToManyField(
         "diagnostics.FaultMode", blank=True, related_name="visits"
     )
+    # A problem outside the catalogue, described (V3-31). Empty means none.
+    other_fault = models.CharField(max_length=300, blank=True)
     is_closed = models.BooleanField(default=False)
     closed_at = models.DateTimeField(null=True, blank=True)
     closed_by = models.ForeignKey("security.User", on_delete=models.SET_NULL, null=True, related_name="+")

@@ -13,7 +13,7 @@ and the reports tell the same story.
 from __future__ import annotations
 
 import random
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -22,7 +22,9 @@ from django.db import transaction
 from django.utils import timezone
 
 from modules.assets.domain.asset_code import generate as generate_code
+from modules.assets.domain.builtin_kinds import BUILTIN_KINDS
 from modules.assets.domain.point_layout import ComponentSpec, plan_layout
+from modules.assets.infrastructure.kind_layouts import write_layout
 from modules.assets.models import (
     Area,
     AssetGroup,
@@ -37,9 +39,9 @@ from modules.assets.models import (
 from modules.core.models import Company, InstalledModule
 from modules.diagnostics.domain.catalogue import ALL_FAULTS
 from modules.diagnostics.models import EquipmentLogEntry, FaultMode
+from modules.measurements.models import Instrument, Magnitude, Reading, Technique, Unit
 from modules.nameplate.models import NameplateData
 from modules.operating_data.models import OperatingParameter, OperatingReading
-from modules.measurements.models import Instrument, Magnitude, Reading, Technique, Unit
 from modules.security.models import Membership, Permission, Role, User
 from modules.services.models import ServiceOrder, ServicePlan, ServiceVisit, VisitParticipant
 from modules.thresholds.domain.defaults import (
@@ -436,41 +438,19 @@ class Command(BaseCommand):
     # ------------------------------------------------------------------- assets
 
     def _group_kinds(self, company) -> dict:
-        """The train taxonomy and the point layout each one measures.
-
-        Straight from the inspection reports: the numbering runs across the
-        whole train, and each machine contributes as many points as it is
-        actually read on — 2+4 on a motor-gearbox, 1+5 on a dryer group.
-        """
+        """The train taxonomy and the point layout each one measures, from the
+        factory blueprints the repair migration also restores."""
         created = {}
-        for code, name, components in GROUP_KINDS:
+        for blueprint in BUILTIN_KINDS:
             kind = AssetGroupKind.objects.create(
-                company=company, code=code, name=name, is_builtin=True,
-                translations={"name": {"es": name}},
+                company=company, code=blueprint.code, name=blueprint.name, is_builtin=True,
+                translations={"name": {"es": blueprint.name, "en": blueprint.name_en}},
             )
-            rows = []
-            for index, (label, equipment_type, position, point_count) in enumerate(components):
-                rows.append(
-                    AssetGroupComponent.objects.create(
-                        kind=kind, order=index, label=label, equipment_type=equipment_type,
-                        position=position, point_count=point_count,
-                    )
-                )
-            by_label = {component.label: component for component in rows}
-            PointTemplate.objects.bulk_create([
-                PointTemplate(
-                    kind=kind, component=by_label[row.component_label], number=row.number,
-                    axis=row.axis, side=row.side, magnitudes=row.magnitudes, order=row.order,
-                )
-                for row in plan_layout([
-                    ComponentSpec(
-                        label=component.label, point_count=component.point_count,
-                        position=component.position, equipment_type=component.equipment_type,
-                    )
-                    for component in rows
-                ])
-            ])
-            created[code] = kind
+            write_layout(
+                kind, blueprint.components,
+                component_model=AssetGroupComponent, template_model=PointTemplate,
+            )
+            created[blueprint.code] = kind
         return created
 
     def _assets(self, company, plant, rgp_path, standards, statuses, kinds) -> list[Equipment]:
@@ -845,33 +825,6 @@ OPERATING_PARAMETERS = [
     ("emissivity", "Emisividad", "Emissivity", "", "thermography", [], False),
     ("load_pct", "Carga", "Load", "%", "thermography", [], False),
     ("oil_hours", "Horas del lubricante", "Oil hours", "h", "oil_analysis", [], True),
-]
-
-# Straight from `docs/vibration/reports`: the components of a train and how
-# many points each one is read on. Nothing here is uniform — the gearbox of
-# report 0021 carries four points against the motor's two, and the dryer
-# groups are read on a single bearing housing plus five on the gearbox.
-GROUP_KINDS = [
-    ("motor_pump", "Motor-Bomba",
-     [("MOTOR", "motor", "driver", 2), ("BOMBA", "pump", "driven", 2)]),
-    ("motor_compressor", "Motor-Compresor",
-     [("MOTOR", "motor", "driver", 2), ("COMPRESOR", "compressor", "driven", 2)]),
-    ("motor_turbine", "Motor-Turbina",
-     [("MOTOR", "motor", "driver", 2), ("TURBINA", "turbine", "driven", 2)]),
-    ("motor_gearbox", "Motor-Reductor",
-     [("MOTOR", "motor", "driver", 2), ("REDUCTOR", "gearbox", "driven", 4)]),
-    ("motor_gearbox_bearings", "Motor-Reductor con chumaceras",
-     [("MOTOR", "motor", "driver", 2), ("REDUCTOR", "gearbox", "driven", 4),
-      ("CHUMACERA LADO MANDO", "bearing_housing", "driven", 2),
-      ("CHUMACERA LADO TRANSMISIÓN", "bearing_housing", "driven", 2)]),
-    ("bearing_gearbox", "Chumacera-Reductor",
-     [("CHUMACERA", "bearing_housing", "driver", 1),
-      ("REDUCTOR", "gearbox", "driven", 5)]),
-    ("motor_fan", "Motor-Ventilador",
-     [("MOTOR", "motor", "driver", 2), ("VENTILADOR", "fan", "driven", 2)]),
-    ("motor_blower", "Motor-Soplador",
-     [("MOTOR", "motor", "driver", 2), ("SOPLADOR", "blower", "driven", 2)]),
-    ("standalone", "Equipo aislado", [("EQUIPO", "other", "driver", 2)]),
 ]
 
 FAULT_KEYWORDS = {

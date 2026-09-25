@@ -77,6 +77,35 @@ def can_upload_media(actor: Actor, visit: VisitRef) -> bool:
     return can_edit_visit(actor, visit) and actor.has("media.upload")
 
 
+@dataclass(frozen=True, slots=True)
+class MediaRef:
+    """Who uploaded a file and, if it is evidence of a visit, that visit."""
+
+    uploaded_by_id: int | None
+    visit: VisitRef | None = None
+
+
+def can_edit_media(actor: Actor, media: MediaRef) -> bool:
+    """The caption under a capture *is* the finding, so it follows the same
+    rule as the visit's other field data; a read-only profile never edits it."""
+    if not actor.has("media.upload"):
+        return False
+    return media.visit is None or can_upload_media(actor, media.visit)
+
+
+def can_delete_media(actor: Actor, media: MediaRef) -> bool:
+    """`media.delete` removes anything. Without it, only the uploader may take
+    a file back — and evidence of a visit only while that visit is still open:
+    a closed visit is a record, not a draft."""
+    if actor.has("media.delete"):
+        return True
+    if media.uploaded_by_id is None or media.uploaded_by_id != actor.user_id:
+        return False
+    if media.visit is None:
+        return actor.has("media.upload")
+    return not media.visit.is_closed and can_upload_media(actor, media.visit)
+
+
 def can_write_log_entry(actor: Actor, visit: VisitRef) -> bool:
     """Notes, observations, conclusions and recommendations. An inspector may
     record what he saw; turning a finding into a closed recommendation is the
@@ -93,6 +122,12 @@ def can_issue_report(actor: Actor) -> bool:
     return actor.role in {Role.PLATFORM_ADMIN, Role.COMPANY_ADMIN, Role.ENGINEER} and actor.has(
         "reports.issue"
     )
+
+
+def can_change_order_status(actor: Actor) -> bool:
+    """Only the administrator moves an order between planned, in progress,
+    done and cancelled (V3-27); planning an order is not closing it."""
+    return actor.role not in READ_ONLY_ROLES and actor.has("services.change_order_status")
 
 
 def can_manage_thresholds(actor: Actor) -> bool:

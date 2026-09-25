@@ -10,10 +10,12 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from modules.operating_data.domain.precision import decimals_for, to_precision
 from modules.operating_data.models import OperatingParameter, OperatingReading
 from modules.security.application.access import build_actor
 from modules.security.domain.policies import can_edit_visit
-from modules.services.interfaces.visit_views import _load, _reference
+from modules.services.infrastructure.visit_refs import visit_ref
+from modules.services.interfaces.visit_views import _load
 
 
 class ParameterListView(APIView):
@@ -57,7 +59,7 @@ class ParameterListView(APIView):
             company_id=request.company_id, code=code, name=name,
             unit_code=(request.data.get("unit_code") or "").strip(),
             technique_code=(request.data.get("technique_code") or "").strip(),
-            decimals=int(request.data.get("decimals") or 1),
+            decimals=_decimals(request.data.get("decimals"), code),
             is_cumulative=bool(request.data.get("is_cumulative")),
             translations={"name": {"es": name}},
         )
@@ -154,7 +156,7 @@ class VisitOperatingView(APIView):
                 "name": parameter.translated("name", language),
                 "unit_code": parameter.unit_code,
                 "decimals": parameter.decimals,
-                "value": str(stored[parameter.code].value)
+                "value": str(to_precision(stored[parameter.code].value, parameter.decimals))
                 if parameter.code in stored and stored[parameter.code].value is not None
                 else None,
                 "text_value": stored[parameter.code].text_value if parameter.code in stored else "",
@@ -168,7 +170,7 @@ class VisitOperatingView(APIView):
     def put(self, request, visit_id: int):
         visit = _load(request, visit_id)
         actor = build_actor(request.user, request.company_id)
-        if not can_edit_visit(actor, _reference(visit)):
+        if not can_edit_visit(actor, visit_ref(visit)):
             raise PermissionDenied("Esta visita no es tuya o ya está cerrada")
 
         parameters = {
@@ -186,13 +188,19 @@ class VisitOperatingView(APIView):
                 defaults={
                     "company_id": request.company_id,
                     "equipment": visit.equipment,
-                    "value": _decimal(entry.get("value")),
+                    "value": to_precision(_decimal(entry.get("value")), parameter.decimals),
                     "text_value": (entry.get("text_value") or "").strip()[:120],
                     "taken_at": visit.visited_at,
                 },
             )
             saved += 1
         return Response({"saved": saved})
+
+
+def _decimals(raw, code: str) -> int:
+    if raw in (None, ""):
+        return decimals_for(code)
+    return max(int(raw), 0)
 
 
 def _decimal(raw):

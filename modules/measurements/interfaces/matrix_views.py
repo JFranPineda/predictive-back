@@ -17,6 +17,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.assets.models import Equipment
+from modules.measurements.domain.magnitude_order import block_sort_key
 from modules.measurements.models import Reading
 from modules.security.application.access import build_actor
 from modules.security.domain.policies import VisitRef, can_edit_visit
@@ -112,6 +113,7 @@ class EquipmentMatrixView(APIView):
                     # The trend selector has no axis to offer on a magnitude
                     # read once per bearing.
                     "per_axis": magnitude.per_axis,
+                    "display_order": magnitude.display_order,
                     "rows": {},
                 },
             )
@@ -185,7 +187,9 @@ class EquipmentMatrixView(APIView):
                         ),
                     ),
                 }
-                for block in sorted(blocks.values(), key=lambda b: b["key"])
+                for block in sorted(
+                    blocks.values(), key=lambda b: block_sort_key(b["display_order"], b["key"])
+                )
             ],
         })
 

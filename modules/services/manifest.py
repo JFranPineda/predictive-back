@@ -3,7 +3,7 @@ from modules.core.domain.manifest import Manifest, MenuItem
 MANIFEST = Manifest(
     code="services",
     name="Servicios y programación",
-    version="0.1.0",
+    version="0.2.0",
     summary="Planes anuales, órdenes de servicio, visitas por equipo, ejecutantes y cumplimiento",
     category="Operación",
     depends=("core", "assets", "security"),
@@ -12,6 +12,7 @@ MANIFEST = Manifest(
         ("services.view", "Ver servicios"),
         ("services.manage_plan", "Gestionar planes"),
         ("services.manage_order", "Gestionar órdenes de servicio"),
+        ("services.change_order_status", "Cambiar el estado de una orden de servicio"),
         ("services.close_visit", "Cerrar visitas de cualquier ejecutante"),
         ("services.view_authorship", "Ver quién ejecutó cada servicio"),
     ),
@@ -20,6 +21,8 @@ MANIFEST = Manifest(
                  permission="services.view"),
         MenuItem(label="Ejecución", route="/services/authorship", icon="user-check", order=26,
                  permission="services.view_authorship"),
+        MenuItem(label="Empresas", route="/settings/providers", icon="building", order=12,
+                 parent="settings", permission="services.manage_order"),
     ),
     events_published=("ServiceCompleted",),
 )

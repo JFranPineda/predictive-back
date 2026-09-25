@@ -114,16 +114,17 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {"code_login": "10/min"},
 }
 
-# Thirty minutes of inactivity, not thirty minutes of session.
+# Ten minutes of inactivity, not ten minutes of session (V3-35).
 #
-# simplejwt defaults to a five-minute access token, which is what was logging
-# people out mid-form. Rotating the refresh on every use restarts the window,
-# so a user who keeps working never notices it, and one who walks away is out
-# in half an hour. The old refresh is blacklisted on rotation: a token that
-# leaked cannot be replayed after the session moved on.
+# The refresh token is the inactivity window: it lives ten minutes, rotates on
+# every use and the old one is blacklisted. The access token is shorter, so the
+# client renews it several times inside the window while someone is working —
+# it renews ahead of expiry, and only if there was activity since the last
+# renewal. With both lifetimes equal and renewal only on a 401, the two tokens
+# expired together and people were logged out mid-form.
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=int(os.environ.get("ACCESS_MINUTES", "30"))),
-    "REFRESH_TOKEN_LIFETIME": timedelta(minutes=int(os.environ.get("IDLE_MINUTES", "30"))),
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=int(os.environ.get("ACCESS_MINUTES", "5"))),
+    "REFRESH_TOKEN_LIFETIME": timedelta(minutes=int(os.environ.get("IDLE_MINUTES", "10"))),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
     "UPDATE_LAST_LOGIN": True,

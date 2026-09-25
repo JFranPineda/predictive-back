@@ -16,6 +16,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.assets.domain.point_layout import ComponentSpec, plan_layout
+from modules.assets.domain.template_rules import (
+    DeclaredComponent,
+    TemplateProblem,
+    TemplateRowSpec,
+    check_template,
+)
 from modules.assets.models import (
     AssetGroup,
     AssetGroupComponent,
@@ -25,11 +31,16 @@ from modules.assets.models import (
 )
 from modules.security.application.access import build_actor
 
-AXES = ("H", "V", "A", "N")
-SIDES = (
-    "free_end", "coupling_end", "opposite_coupling", "inboard", "outboard",
-    "lower", "upper", "custom",
-)
+
+class TemplateRejectedError(ValidationError):
+    """Every problem of the template, each with the rows that cause it, so the
+    editor can mark them instead of printing one sentence at the top."""
+
+    def __init__(self, problems: list[TemplateProblem]) -> None:
+        super().__init__({
+            "detail": problems[0].message,
+            "problems": [{"message": p.message, "rows": list(p.rows)} for p in problems],
+        })
 
 
 class KindView(APIView):
@@ -87,6 +98,13 @@ class KindDetailView(KindView):
         for field in ("name", "description"):
             if field in request.data:
                 setattr(kind, field, (request.data.get(field) or "").strip())
+        if "name" in request.data:
+            # The list reads the translated name; renaming only `name` left the
+            # old one on screen.
+            language = getattr(request, "language", "es")
+            names = dict((kind.translations or {}).get("name") or {})
+            names[language] = kind.name
+            kind.translations = {**(kind.translations or {}), "name": names}
         if "is_active" in request.data:
             kind.is_active = bool(request.data["is_active"])
         kind.save()
@@ -245,7 +263,7 @@ def _payload(kind: AssetGroupKind, language: str) -> dict:
                 "component_id": t.component_id,
                 "component_label": t.component.label if t.component else "",
             }
-            for t in kind.point_templates.all()
+            for t in kind.point_templates.select_related("component").order_by("order", "number", "id")
         ],
     }
 
@@ -270,36 +288,37 @@ def _replace_components(kind: AssetGroupKind, rows) -> None:
 
 
 def _replace_templates(kind: AssetGroupKind, rows) -> None:
-    components = {c.label: c for c in kind.components.all()}
-    prepared = []
-    seen = set()
-    for order, row in enumerate(rows):
-        number = int(row.get("number") or 0)
-        axis = row.get("axis") or "H"
-        if number < 1:
-            raise ValidationError("El número de punto debe ser 1 o mayor")
-        if axis not in AXES:
-            raise ValidationError(f"Eje desconocido: {axis}")
-        if (number, axis) in seen:
-            raise ValidationError(f"El punto {number}{axis} está repetido")
-        seen.add((number, axis))
-        side = row.get("side") or "custom"
-        if side not in SIDES:
-            raise ValidationError(f"Lado desconocido: {side}")
-        prepared.append(
-            PointTemplate(
-                kind=kind,
-                component=components.get(row.get("component_label") or ""),
-                number=number,
-                axis=axis,
-                side=side,
-                point_type=row.get("point_type") or "bearing",
-                magnitudes=[str(code) for code in (row.get("magnitudes") or [])],
-                order=order,
-            )
+    specs = [
+        TemplateRowSpec(
+            number=int(row.get("number") or 0),
+            axis=row.get("axis") or "H",
+            side=row.get("side") or "custom",
+            component_label=row.get("component_label") or "",
         )
+        for row in rows
+    ]
+    components = list(kind.components.all())
+    problems = check_template(
+        specs, [DeclaredComponent(c.label, c.point_count) for c in components]
+    )
+    if problems:
+        raise TemplateRejectedError(problems)
+
+    by_label = {component.label: component for component in components}
     kind.point_templates.all().delete()
-    PointTemplate.objects.bulk_create(prepared)
+    PointTemplate.objects.bulk_create([
+        PointTemplate(
+            kind=kind,
+            component=by_label.get(spec.component_label),
+            number=spec.number,
+            axis=spec.axis,
+            side=spec.side,
+            point_type=row.get("point_type") or "bearing",
+            magnitudes=[str(code) for code in (row.get("magnitudes") or [])],
+            order=order,
+        )
+        for order, (spec, row) in enumerate(zip(specs, rows, strict=True))
+    ])
 
 
 def _default_templates(kind: AssetGroupKind) -> None:

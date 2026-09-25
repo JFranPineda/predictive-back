@@ -40,6 +40,10 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "C4", "DJ", "RUF"]
 
+[tool.ruff.lint.per-file-ignores]
+# Migrations bind historical models to CamelCase names, as Django writes them.
+"**/migrations/*.py" = ["N803", "N806", "E501"]
+
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings.test"
 python_files = ["test_*.py"]
@@ -56,6 +60,7 @@ strict = true
 # Hexagonal boundaries are enforced here, not by convention.
 [tool.importlinter]
 root_packages = ["modules"]
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "domain is pure python"

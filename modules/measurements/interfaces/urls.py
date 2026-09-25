@@ -1,5 +1,6 @@
 from django.urls import path
 
+from modules.measurements.interfaces.capture_views import VisitCaptureView
 from modules.measurements.interfaces.catalogue_views import (
     InstrumentDetailView,
     InstrumentListView,
@@ -9,7 +10,6 @@ from modules.measurements.interfaces.catalogue_views import (
     UnitDetailView,
     UnitListView,
 )
-from modules.measurements.interfaces.capture_views import VisitCaptureView
 from modules.measurements.interfaces.export_views import RecordExportView
 from modules.measurements.interfaces.matrix_views import EquipmentMatrixView
 from modules.measurements.interfaces.spectrum_views import (
