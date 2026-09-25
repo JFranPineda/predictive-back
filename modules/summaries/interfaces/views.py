@@ -59,12 +59,14 @@ class PlantSummaryView(APIView):
             for technique in served.get(item.id, ())
         ]
         summaries = by_technique(rows)
-        techniques = _technique_names(language)
+        techniques = _techniques(language)
 
         return Response([
             {
                 "technique_code": code,
-                "technique_name": techniques.get(code, code),
+                "technique_name": techniques.get(code, (code, "mpd"))[0],
+                # MPd Predictivo or END: the tabs are grouped by family (V3-19).
+                "technique_family": techniques.get(code, (code, "mpd"))[1],
                 "nodes": [_node(node) for node in nodes],
             }
             for code, nodes in summaries.items()
@@ -275,7 +277,7 @@ def _status_payload(status: Status) -> dict:
     }
 
 
-def _technique_names(language: str) -> dict[str, str]:
+def _techniques(language: str) -> dict[str, tuple[str, str]]:
     from modules.measurements.models import Technique
 
-    return {row.code: row.translated("name", language) for row in Technique.objects.all()}
+    return {row.code: (row.translated("name", language), row.family) for row in Technique.objects.all()}

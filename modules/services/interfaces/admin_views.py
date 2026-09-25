@@ -17,6 +17,7 @@ from rest_framework.views import APIView
 from modules.assets.models import Equipment
 from modules.core.infrastructure.audit import record
 from modules.diagnostics.models import EquipmentLogEntry
+from modules.measurements.domain.families import is_offered
 from modules.measurements.models import Instrument, Magnitude, Technique
 from modules.security.application.access import build_actor
 from modules.security.domain.policies import (
@@ -55,6 +56,8 @@ class ServiceOrderAdminView(ServiceAdminView):
         technique = Technique.objects.filter(code=request.data.get("technique")).first()
         if plant is None or technique is None:
             raise ValidationError("Debes elegir una planta y una técnica")
+        if not is_offered(technique.family):
+            raise ValidationError(f"{technique.name} no es un servicio que se ordene")
 
         code = (request.data.get("code") or "").strip()
         if not code:

@@ -13,6 +13,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.core.domain.i18n import SUPPORTED_LANGUAGES
+from modules.measurements.domain.families import is_offered
 from modules.measurements.domain.magnitude_order import display_order_for
 from modules.measurements.models import Magnitude, Technique, Unit
 from modules.security.application.access import build_actor
@@ -27,15 +28,21 @@ class TechniqueListView(APIView):
 
     def get(self, request):
         language = getattr(request, "language", "es")
+        rows = Technique.objects.prefetch_related("magnitudes", "standards").order_by("family", "name")
+        if request.query_params.get("family"):
+            rows = rows.filter(family=request.query_params["family"])
+        if request.query_params.get("offered") == "1":
+            rows = [row for row in rows if is_offered(row.family)]
         return Response([
             {
                 "code": row.code,
                 "name": row.translated("name", language),
+                "family": row.family,
                 "module_code": row.module_code,
                 "magnitude_count": row.magnitudes.count(),
                 "standard_count": row.standards.count(),
             }
-            for row in Technique.objects.prefetch_related("magnitudes", "standards").order_by("code")
+            for row in rows
         ])
 
 

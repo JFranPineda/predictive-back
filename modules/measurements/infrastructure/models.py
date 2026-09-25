@@ -23,6 +23,11 @@ class Technique(TranslatableModel):
     # technique with several magnitudes still has one number that explains
     # its colour.
     headline_magnitude = models.SlugField(max_length=40, blank=True)
+    # MPd Predictivo, END, or internal (never ordered): see domain/families.py.
+    family = models.CharField(
+        max_length=10, choices=[("mpd", "MPd Predictivo"), ("ndt", "END"), ("internal", "Interno")],
+        default="mpd", db_index=True,
+    )
     module_code = models.SlugField(max_length=60)
 
 
