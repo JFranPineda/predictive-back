@@ -9,7 +9,6 @@ report expects, instead of six generic points somebody has to rename.
 
 from __future__ import annotations
 
-from django.db import transaction
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -29,6 +28,7 @@ from modules.assets.models import (
     MeasurementPoint,
     PointTemplate,
 )
+from modules.core.infrastructure.transactions import tenant_atomic
 from modules.security.application.access import build_actor
 
 
@@ -65,7 +65,7 @@ class KindCollectionView(KindView):
         )
         return Response([_payload(row, language) for row in rows])
 
-    @transaction.atomic
+    @tenant_atomic
     def post(self, request):
         self.require(request)
         name = (request.data.get("name") or "").strip()
@@ -91,7 +91,7 @@ class KindCollectionView(KindView):
 
 
 class KindDetailView(KindView):
-    @transaction.atomic
+    @tenant_atomic
     def patch(self, request, kind_id: int):
         self.require(request)
         kind = _get(self.scoped(request), kind_id)
@@ -166,7 +166,7 @@ class GroupPointsView(KindView):
             ],
         })
 
-    @transaction.atomic
+    @tenant_atomic
     def post(self, request, group_id: int):
         """Applies the kind's layout to this train's equipment."""
         self.require(request, "assets.manage_point")

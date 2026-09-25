@@ -13,13 +13,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
-from django.db import transaction
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.core.infrastructure.bus import bus
+from modules.core.infrastructure.transactions import tenant_atomic
 from modules.measurements.application.record_readings import ReadingInput, RecordReadings
 from modules.measurements.infrastructure.repositories import (
     DjangoPointContextRepository,
@@ -43,7 +43,7 @@ class VisitCaptureView(APIView):
 
     permission_classes = [IsAuthenticated]
 
-    @transaction.atomic
+    @tenant_atomic
     def post(self, request, visit_id: int):
         visit = (
             ServiceVisit.objects.for_company(request.company_id)
