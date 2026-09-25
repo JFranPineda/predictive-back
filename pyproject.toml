@@ -42,7 +42,7 @@ select = ["E", "F", "I", "N", "UP", "B", "C4", "DJ", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
 # Migrations bind historical models to CamelCase names, as Django writes them.
-"**/migrations/*.py" = ["N803", "N806", "E501"]
+"**/migrations/*.py" = ["N803", "N806", "E501", "RUF012"]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings.test"
