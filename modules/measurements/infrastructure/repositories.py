@@ -119,22 +119,38 @@ class DjangoReadingRepository:
                 .filter(code=condition_status, kind="condition")
                 .first()
             )
-        reading = models.Reading.objects.create(
-            company_id=company_id,
-            service_visit_id=service_visit_id,
-            taken_at=taken_at,
-            point_id=item.point_id,
-            magnitude=magnitude,
-            value=item.value,
-            unit=unit,
-            aggregation=item.aggregation,
-            condition_status=status,
-            threshold_set_id=threshold_set_id,
-            operator_id=operator_id,
-            quality=item.quality,
-            not_measured_reason=item.not_measured_reason,
-            notes=item.notes,
+        fields = {
+            "taken_at": taken_at,
+            "value": item.value,
+            "unit": unit,
+            "condition_status": status,
+            "threshold_set_id": threshold_set_id,
+            "operator_id": operator_id,
+            "quality": item.quality,
+            "not_measured_reason": item.not_measured_reason,
+            "notes": item.notes,
+        }
+        # Opening a visit seeds an empty row per point and magnitude so the
+        # form has something to type into. The round fills that row; creating
+        # a second one left the empty row beside the value, and the record of
+        # values could show either.
+        reading = (
+            models.Reading.objects.filter(
+                company_id=company_id, service_visit_id=service_visit_id, point_id=item.point_id,
+                magnitude=magnitude, aggregation=item.aggregation, value__isnull=True,
+            )
+            .order_by("id")
+            .first()
         )
+        if reading is None:
+            reading = models.Reading.objects.create(
+                company_id=company_id, service_visit_id=service_visit_id, point_id=item.point_id,
+                magnitude=magnitude, aggregation=item.aggregation, **fields,
+            )
+        else:
+            for name, value in fields.items():
+                setattr(reading, name, value)
+            reading.save()
         self._written.append(reading.id)
         return reading.id
 
