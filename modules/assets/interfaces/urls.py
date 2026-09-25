@@ -15,6 +15,7 @@ from modules.assets.interfaces.admin_views import (
     SectorCollectionView,
     SectorDetailView,
 )
+from modules.assets.interfaces.group_views import TrainOverviewView
 from modules.assets.interfaces.kind_views import (
     GroupPointsView,
     KindCollectionView,
@@ -34,6 +35,7 @@ urlpatterns = [
     path("sectors/", SectorCollectionView.as_view(), name="sector-create"),
     path("sectors/<int:sector_id>/", SectorDetailView.as_view(), name="sector-detail"),
     path("asset-groups/", AssetGroupCollectionView.as_view(), name="asset-groups"),
+    path("asset-groups/overview/", TrainOverviewView.as_view(), name="asset-group-overview"),
     path("asset-groups/<int:group_id>/", AssetGroupDetailView.as_view(), name="asset-group-detail"),
     path("equipments/new/", EquipmentCollectionView.as_view(), name="equipment-create"),
     path("equipments/<int:equipment_id>/edit/", EquipmentDetailView.as_view(), name="equipment-edit"),
