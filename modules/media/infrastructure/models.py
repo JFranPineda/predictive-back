@@ -15,6 +15,10 @@ class MediaAsset(TenantModel):
         ("nameplate", "Placa de características"),
         ("document", "Documento"),
         ("report_pdf", "Reporte PDF"),
+        # A train's schematic (points marked, as in the report header) and a
+        # real photograph of it (V3-14). Owned by the train, not a visit.
+        ("schematic", "Esquema del conjunto"),
+        ("site_photo", "Foto del equipo"),
     ]
     STATES = [
         ("pending", "Pendiente"), ("uploading", "Subiendo"), ("processing", "Procesando"),
