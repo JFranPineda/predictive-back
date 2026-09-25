@@ -6,7 +6,7 @@ MANIFEST = Manifest(
     version="0.1.0",
     summary="Puntos, magnitudes, unidades, lecturas y tendencias. Base de todas las técnicas",
     category="Análisis predictivo",
-    depends=("core", "assets", "thresholds"),
+    depends=("core", "assets", "thresholds", "services"),
     auto_install=True,
     permissions=(
         ("measurements.view_reading", "Ver lecturas"),
@@ -19,5 +19,4 @@ MANIFEST = Manifest(
                  permission="measurements.view_reading"),
     ),
     events_published=("ReadingRecorded",),
-    fixtures=("units.yaml", "techniques.yaml", "magnitudes.yaml"),
 )

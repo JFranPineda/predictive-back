@@ -17,7 +17,7 @@ MANIFEST = Manifest(
         ("thresholds.recalculate", "Recalcular estados históricos"),
     ),
     menu=(
-        MenuItem(label="Medidas", route="/settings/magnitudes", icon="ruler",
+        MenuItem(label="Tipos de medición", route="/settings/magnitudes", icon="ruler",
                  order=16, parent="settings", permission="thresholds.view_set"),
         MenuItem(label="Normas", route="/settings/standards", icon="book",
                  order=18, parent="settings", permission="thresholds.manage_standard"),
@@ -26,8 +26,6 @@ MANIFEST = Manifest(
         MenuItem(label="Estados", route="/settings/statuses", icon="palette",
                  order=22, parent="settings", permission="thresholds.manage_status"),
     ),
-    fixtures=("statuses.yaml", "technique_profiles.yaml", "standards.yaml", "iso_10816_3.yaml",
-              "technical_associates.yaml"),
     events_subscribed=("ReadingRecorded",),
     events_published=("ThresholdSetChanged", "StandardChanged", "EquipmentStatusChanged"),
 )

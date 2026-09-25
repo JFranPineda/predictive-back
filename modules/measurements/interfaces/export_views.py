@@ -15,7 +15,7 @@ from modules.measurements.infrastructure.record_export import (
     ExportColumn,
     build_workbook,
 )
-from modules.measurements.interfaces.matrix_views import EquipmentMatrixView
+from modules.measurements.interfaces.matrix_views import build_matrix, resolve_train
 
 SIDE_LABELS = {
     "free_end": "LADO LIBRE",
@@ -30,42 +30,65 @@ SIDE_LABELS = {
 
 
 class RecordExportView(APIView):
+    """The record of one machine's train as the customer's workbook."""
+
     permission_classes = [IsAuthenticated]
 
     def get(self, request, equipment_id: int):
-        # The grid and the workbook must never disagree, so the export reads
-        # the same payload the screen does rather than querying again.
-        matrix = EquipmentMatrixView().get(request, equipment_id).data
-        if "equipment" not in matrix:
+        equipment = (
+            Equipment.objects.for_company(request.company_id)
+            .select_related("asset_group__sector__area")
+            .filter(id=equipment_id)
+            .first()
+        )
+        if equipment is None:
             return HttpResponse(status=404)
+        return _workbook(request, equipment, request.query_params.get("scope", "group"))
 
-        operating, labels = _operating(request, matrix["columns"])
-        payload = build_workbook(
-            equipment=matrix["equipment"],
-            columns=[
-                ExportColumn(
-                    date=column["date"],
-                    order_code=column["order_code"],
-                    operators=_operators(request, column),
-                    operating=_merge(operating, column),
-                )
-                for column in matrix["columns"]
-            ],
-            blocks=[_block(block) for block in matrix["blocks"]],
-            bands=_bands(request, equipment_id),
-            operating_labels=labels,
-            title="SERVICIO DE MANTENIMIENTO PREDICTIVO",
-        )
 
-        filename = f"registro-{matrix['equipment']['tag']}-{date.today().isoformat()}.xlsx"
-        response = HttpResponse(
-            payload,
-            content_type=(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            ),
-        )
-        response["Content-Disposition"] = f'attachment; filename="{filename}"'
-        return response
+class TrainRecordExportView(APIView):
+    """The same workbook for a train, or one machine of it (V3-08)."""
+
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request, group_id: int):
+        resolved = resolve_train(request, group_id)
+        if resolved is None:
+            return HttpResponse(status=404)
+        return _workbook(request, *resolved)
+
+
+def _workbook(request, equipment, scope: str) -> HttpResponse:
+    # The grid and the workbook must never disagree, so the export reads the
+    # same payload the screen does rather than querying again.
+    matrix = build_matrix(request, equipment, scope)
+    operating, labels = _operating(request, matrix["columns"])
+    payload = build_workbook(
+        equipment=matrix["equipment"],
+        columns=[
+            ExportColumn(
+                date=column["date"],
+                order_code=column["order_code"],
+                operators=_operators(request, column),
+                operating=_merge(operating, column),
+            )
+            for column in matrix["columns"]
+        ],
+        blocks=[_block(block) for block in matrix["blocks"]],
+        bands=_bands(request, equipment.id),
+        operating_labels=labels,
+        title="SERVICIO DE MANTENIMIENTO PREDICTIVO",
+    )
+
+    filename = f"registro-{matrix['equipment']['tag']}-{date.today().isoformat()}.xlsx"
+    response = HttpResponse(
+        payload,
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+    )
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
 
 
 def _block(block: dict) -> ExportBlock:

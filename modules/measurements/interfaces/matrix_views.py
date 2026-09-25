@@ -22,6 +22,9 @@ from modules.measurements.models import Reading
 from modules.security.application.access import build_actor
 from modules.security.domain.policies import VisitRef, can_edit_visit
 
+# The order the analyst reads the axes in: horizontal, vertical, axial.
+AXIS_ORDER = {"H": 0, "V": 1, "A": 2}
+
 # The order the sheet prints them in.
 SIDE_ORDER = {
     "free_end": 0,
@@ -39,159 +42,211 @@ class EquipmentMatrixView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, equipment_id: int):
-        language = getattr(request, "language", "es")
-        equipment = (
-            Equipment.objects.for_company(request.company_id)
-            .select_related("asset_group__sector__area")
-            .filter(id=equipment_id)
-            .first()
-        )
+        equipment = _equipment(request, equipment_id)
         if equipment is None:
             return Response({"type": "not_found", "status": 404}, status=404)
+        return Response(build_matrix(request, equipment, request.query_params.get("scope", "group")))
 
-        scope = request.query_params.get("scope", "group")
-        equipments = (
-            list(equipment.asset_group.equipments.all())
-            if scope == "group"
-            else [equipment]
+
+class TrainMatrixView(APIView):
+    """The record of a train (V3-06). Without `equipment` it is the whole
+    train; with it, that one machine — the scope list of V3-08."""
+
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request, group_id: int):
+        resolved = resolve_train(request, group_id)
+        if resolved is None:
+            return Response({"type": "not_found", "status": 404}, status=404)
+        return Response(build_matrix(request, *resolved))
+
+
+def resolve_train(request, group_id: int) -> tuple[Equipment, str] | None:
+    """The machine the record is read through, and the scope."""
+    machines = (
+        Equipment.objects.for_company(request.company_id)
+        .select_related("asset_group__sector__area")
+        .filter(asset_group_id=group_id)
+        .order_by("order_in_group", "id")
+    )
+    wanted = request.query_params.get("equipment")
+    if wanted:
+        machine = machines.filter(id=wanted).first()
+        return (machine, "equipment") if machine else None
+    machine = machines.first()
+    return (machine, "group") if machine else None
+
+
+def _equipment(request, equipment_id: int) -> Equipment | None:
+    return (
+        Equipment.objects.for_company(request.company_id)
+        .select_related("asset_group__sector__area")
+        .filter(id=equipment_id)
+        .first()
+    )
+
+
+def build_matrix(request, equipment: Equipment, scope: str) -> dict:
+    """The payload the screen and the Excel export both read."""
+    language = getattr(request, "language", "es")
+    equipments = (
+        list(equipment.asset_group.equipments.all())
+        if scope == "group"
+        else [equipment]
+    )
+
+    readings = (
+        Reading.objects.for_company(request.company_id)
+        .filter(point__equipment__in=equipments)
+        .select_related(
+            "point__equipment",
+            "magnitude__default_unit",
+            "unit",
+            "condition_status",
+            "service_visit__service_order__technique",
+        )
+        .order_by("taken_at", "point__number", "point__axis")
+    )
+    if request.query_params.get("technique"):
+        readings = readings.filter(
+            magnitude__technique__code=request.query_params["technique"]
         )
 
-        readings = (
-            Reading.objects.for_company(request.company_id)
-            .filter(point__equipment__in=equipments)
-            .select_related(
-                "point__equipment",
-                "magnitude__default_unit",
-                "unit",
-                "condition_status",
-                "service_visit__service_order__technique",
-            )
-            .order_by("taken_at", "point__number", "point__axis")
-        )
-        if request.query_params.get("technique"):
-            readings = readings.filter(
-                magnitude__technique__code=request.query_params["technique"]
-            )
+    actor = build_actor(request.user, request.company_id)
+    columns: dict[str, dict] = {}
+    blocks: dict[str, dict] = {}
 
-        actor = build_actor(request.user, request.company_id)
-        columns: dict[str, dict] = {}
-        blocks: dict[str, dict] = {}
+    for reading in readings:
+        # A column is a round, not an instant. The motor and the pump of
+        # one train are visited hours apart, and keying by timestamp split
+        # every round into two half-empty columns.
+        column_key = _column_key(reading)
+        column = columns.get(column_key)
+        if column is None:
+            columns[column_key] = _column(reading, actor, equipment)
+        else:
+            column["can_edit"] = column["can_edit"] or _editable(reading, actor, equipment)
+        # One round covers the whole train, so a column spans the visit of
+        # each machine in it. Keeping only the first lost the operating
+        # conditions of the other one.
+        if reading.service_visit_id:
+            entry = columns[column_key]
+            if reading.service_visit_id not in entry["visit_ids"]:
+                entry["visit_ids"].append(reading.service_visit_id)
+            # Which of them is the machine that was asked for. A running
+            # hour counter belongs to one machine, so merging the train's
+            # visits blindly made it jump between two counters.
+            if reading.point.equipment_id == equipment.id:
+                entry["primary_visit_id"] = reading.service_visit_id
 
-        for reading in readings:
-            # A column is a round, not an instant. The motor and the pump of
-            # one train are visited hours apart, and keying by timestamp split
-            # every round into two half-empty columns.
-            column_key = _column_key(reading)
-            column = columns.get(column_key)
-            if column is None:
-                columns[column_key] = _column(reading, actor, equipment)
-            else:
-                column["can_edit"] = column["can_edit"] or _editable(reading, actor, equipment)
-            # One round covers the whole train, so a column spans the visit of
-            # each machine in it. Keeping only the first lost the operating
-            # conditions of the other one.
-            if reading.service_visit_id:
-                entry = columns[column_key]
-                if reading.service_visit_id not in entry["visit_ids"]:
-                    entry["visit_ids"].append(reading.service_visit_id)
-                # Which of them is the machine that was asked for. A running
-                # hour counter belongs to one machine, so merging the train's
-                # visits blindly made it jump between two counters.
-                if reading.point.equipment_id == equipment.id:
-                    entry["primary_visit_id"] = reading.service_visit_id
-
-            magnitude = reading.magnitude
-            block = blocks.setdefault(
-                _block_key(reading),
-                {
-                    "key": _block_key(reading),
-                    "magnitude_code": magnitude.code,
-                    "title": magnitude.translated("name", language),
-                    "unit": reading.unit.code,
-                    "aggregation": reading.aggregation,
-                    "decimals": magnitude.decimals,
-                    # The trend selector has no axis to offer on a magnitude
-                    # read once per bearing.
-                    "per_axis": magnitude.per_axis,
-                    "display_order": magnitude.display_order,
-                    "rows": {},
-                },
-            )
-            # A magnitude read once on the bearing owns one row per point, not
-            # one per axis: the sheet prints "1 ENV", never "1H, 1V, 1A".
-            row_key = (
-                reading.point_id
-                if magnitude.per_axis
-                else (reading.point.equipment_id, reading.point.number)
-            )
-            row = block["rows"].setdefault(
-                row_key,
-                {
-                    "point_id": reading.point_id,
-                    "label": (
-                        reading.point.label
-                        if magnitude.per_axis
-                        else magnitude.row_label(reading.point.number)
-                    ),
-                    "number": reading.point.number,
-                    "axis": reading.point.axis,
-                    "side": reading.point.side,
-                    "component": reading.point.equipment.name,
-                    "component_id": reading.point.equipment_id,
-                    # The train prints in its own order, not in the order the
-                    # machines happened to be created.
-                    "component_order": reading.point.equipment.order_in_group,
-                    "cells": {},
-                },
-            )
-            row["cells"][column_key] = {
-                "reading_id": reading.id,
-                "value": str(reading.value) if reading.value is not None else None,
-                "status_code": reading.condition_status.code if reading.condition_status else None,
-                "status_color": reading.condition_status.color if reading.condition_status else None,
-                "quality": reading.quality,
-                "visit_id": reading.service_visit_id,
-            }
-
-        ordered_columns = sorted(columns.values(), key=lambda column: column["taken_at"])
-        return Response({
-            "equipment": {
-                "id": equipment.id,
-                "name": equipment.name,
-                "tag": equipment.client_tag or equipment.asset_code,
-                "group": equipment.asset_group.name,
-                "area": f"{equipment.asset_group.sector.area.code} - "
-                        f"{equipment.asset_group.sector.area.name}",
+        magnitude = reading.magnitude
+        block = blocks.setdefault(
+            _block_key(reading),
+            {
+                "key": _block_key(reading),
+                "magnitude_code": magnitude.code,
+                "title": magnitude.translated("name", language),
+                "unit": reading.unit.code,
+                "aggregation": reading.aggregation,
+                "decimals": magnitude.decimals,
+                # The trend selector has no axis to offer on a magnitude
+                # read once per bearing.
+                "per_axis": magnitude.per_axis,
+                "display_order": magnitude.display_order,
+                "rows": {},
             },
-            "scope": scope,
-            "columns": ordered_columns,
-            "blocks": [
-                {
-                    **block,
-                    "rows": sorted(
-                        (
-                            {
-                                **row,
-                                "cells": [
-                                    row["cells"].get(column["key"]) for column in ordered_columns
-                                ],
-                            }
-                            for row in block["rows"].values()
-                        ),
-                        key=lambda row: (
-                            row["component_order"],
-                            row["component_id"],
-                            SIDE_ORDER.get(row["side"], 9),
-                            row["number"],
-                            row["axis"],
-                        ),
+        )
+        # A magnitude read once on the bearing owns one row per point, not
+        # one per axis: the sheet prints "1 ENV", never "1H, 1V, 1A".
+        row_key = (
+            reading.point_id
+            if magnitude.per_axis
+            else (reading.point.equipment_id, reading.point.number)
+        )
+        row = block["rows"].setdefault(
+            row_key,
+            {
+                "point_id": reading.point_id,
+                "label": (
+                    reading.point.label
+                    if magnitude.per_axis
+                    else magnitude.row_label(reading.point.number)
+                ),
+                "number": reading.point.number,
+                "axis": reading.point.axis,
+                "side": reading.point.side,
+                "component": reading.point.equipment.name,
+                "component_id": reading.point.equipment_id,
+                # The train prints in its own order, not in the order the
+                # machines happened to be created.
+                "component_order": reading.point.equipment.order_in_group,
+                "cells": {},
+            },
+        )
+        row["cells"][column_key] = {
+            "reading_id": reading.id,
+            "value": str(reading.value) if reading.value is not None else None,
+            "status_code": reading.condition_status.code if reading.condition_status else None,
+            "status_color": reading.condition_status.color if reading.condition_status else None,
+            "quality": reading.quality,
+            "visit_id": reading.service_visit_id,
+        }
+
+    ordered_columns = sorted(columns.values(), key=lambda column: column["taken_at"])
+    return {
+        "equipment": {
+            "id": equipment.id,
+            "name": equipment.name,
+            "tag": equipment.client_tag or equipment.asset_code,
+            "group": equipment.asset_group.name,
+            "area": f"{equipment.asset_group.sector.area.code} - "
+                    f"{equipment.asset_group.sector.area.name}",
+        },
+        "scope": scope,
+        "train": _train(equipment),
+        "columns": ordered_columns,
+        "blocks": [
+            {
+                **block,
+                "rows": sorted(
+                    (
+                        {
+                            **row,
+                            "cells": [
+                                row["cells"].get(column["key"]) for column in ordered_columns
+                            ],
+                        }
+                        for row in block["rows"].values()
                     ),
-                }
-                for block in sorted(
-                    blocks.values(), key=lambda b: block_sort_key(b["display_order"], b["key"])
-                )
-            ],
-        })
+                    key=lambda row: (
+                        row["component_order"],
+                        row["component_id"],
+                        SIDE_ORDER.get(row["side"], 9),
+                        row["number"],
+                        AXIS_ORDER.get(row["axis"], 9),
+                    ),
+                ),
+            }
+            for block in sorted(
+                blocks.values(), key=lambda b: block_sort_key(b["display_order"], b["key"])
+            )
+        ],
+    }
+
+
+def _train(equipment: Equipment) -> dict:
+    """The train and its machines, in the train's order: what the scope list
+    offers — the whole train, or each machine by its slot and TAG."""
+    group = equipment.asset_group
+    return {
+        "id": group.id,
+        "name": group.name,
+        "equipments": [
+            {"id": machine.id, "name": machine.name,
+             "tag": machine.client_tag or machine.asset_code, "type": machine.equipment_type}
+            for machine in group.equipments.order_by("order_in_group", "id")
+        ],
+    }
 
 
 def _block_key(reading: Reading) -> str:

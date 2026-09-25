@@ -10,16 +10,21 @@ from modules.measurements.interfaces.catalogue_views import (
     UnitDetailView,
     UnitListView,
 )
-from modules.measurements.interfaces.export_views import RecordExportView
-from modules.measurements.interfaces.matrix_views import EquipmentMatrixView
+from modules.measurements.interfaces.export_views import RecordExportView, TrainRecordExportView
+from modules.measurements.interfaces.matrix_views import EquipmentMatrixView, TrainMatrixView
 from modules.measurements.interfaces.spectrum_views import (
     SpectrumCollectionView,
     SpectrumCurveView,
     SpectrumDetailView,
 )
+from modules.measurements.interfaces.train_views import TrainIndexView
 from modules.measurements.interfaces.views import TrendView
 
 urlpatterns = [
+    path("measurement-trains/", TrainIndexView.as_view(), name="measurement-trains"),
+    path("asset-groups/<int:group_id>/matrix/", TrainMatrixView.as_view(), name="train-matrix"),
+    path("asset-groups/<int:group_id>/matrix/export/", TrainRecordExportView.as_view(),
+         name="train-matrix-export"),
     path("equipments/<int:equipment_id>/trend/", TrendView.as_view(), name="equipment-trend"),
     path(
         "equipments/<int:equipment_id>/matrix/",
