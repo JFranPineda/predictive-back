@@ -46,6 +46,9 @@ class Magnitude(TranslatableModel):
     # Where its table sits in the record of values: velocity before envelope
     # before temperature, as the customer's sheet prints them.
     display_order = models.PositiveSmallIntegerField(default=900)
+    # Read only on the points whose kind template lists it (V3-11); the rest
+    # are read wherever the service goes.
+    template_only = models.BooleanField(default=False)
     # Velocity is read on three axes of a bearing; the envelope, the
     # temperature of the housing and an ultrasound level are read once on it.
     # Writing them three times is what filled the record of values with rows

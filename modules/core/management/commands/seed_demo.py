@@ -39,6 +39,9 @@ from modules.assets.models import (
 from modules.core.models import Company, InstalledModule
 from modules.diagnostics.domain.catalogue import ALL_FAULTS
 from modules.diagnostics.models import EquipmentLogEntry, FaultMode
+from modules.measurements.domain.acceleration import ACCELERATION
+from modules.measurements.domain.families import family_for
+from modules.measurements.domain.magnitude_order import display_order_for
 from modules.measurements.models import Instrument, Magnitude, Reading, Technique, Unit
 from modules.nameplate.models import NameplateData
 from modules.operating_data.models import OperatingParameter, OperatingReading
@@ -277,7 +280,7 @@ class Command(BaseCommand):
         }
         techniques = {
             code: Technique.objects.create(
-                code=code, name=name_es, module_code=module,
+                code=code, name=name_es, module_code=module, family=family_for(code),
                 translations={"name": {"es": name_es, "en": name_en}},
             )
             for code, name_es, name_en, module in TECHNIQUES
@@ -286,10 +289,19 @@ class Command(BaseCommand):
             code: Magnitude.objects.create(
                 code=code, technique=techniques[technique], name=name_es,
                 default_unit=units[unit], default_aggregation=aggregation, decimals=decimals,
+                display_order=display_order_for(code),
                 translations={"name": {"es": name_es, "en": name_en}},
             )
             for code, technique, name_es, name_en, unit, aggregation, decimals in MAGNITUDES
         }
+        spec = ACCELERATION
+        magnitudes[spec.code] = Magnitude.objects.create(
+            code=spec.code, technique=techniques[spec.technique], name=spec.name_es,
+            default_unit=units[spec.unit], default_aggregation=spec.aggregation,
+            decimals=spec.decimals, per_axis=spec.per_axis, higher_is_worse=spec.higher_is_worse,
+            template_only=spec.template_only, display_order=display_order_for(spec.code),
+            translations={"name": {"es": spec.name_es, "en": spec.name_en}},
+        )
         return units, techniques, magnitudes
 
     def _profiles(self, company, statuses, techniques) -> None:

@@ -18,7 +18,7 @@ from modules.assets.models import Equipment
 from modules.core.infrastructure.audit import record
 from modules.diagnostics.models import EquipmentLogEntry
 from modules.measurements.domain.families import is_offered
-from modules.measurements.models import Instrument, Magnitude, Technique
+from modules.measurements.models import Instrument, Technique
 from modules.security.application.access import build_actor
 from modules.security.domain.policies import (
     can_change_order_status,
@@ -296,21 +296,19 @@ class LogEntryDetailView(ServiceAdminView):
 
 
 def _seed_readings(visit: ServiceVisit, equipment: Equipment, company_id: int) -> None:
-    """Empty rows for every point and magnitude the technique measures, so the
-    field form opens ready to be typed into."""
+    """Empty rows for every point and magnitude the round reads, so the field
+    form opens ready to be typed into. Opt-in magnitudes (acceleration) only
+    where the kind's template asks for them."""
+    from modules.measurements.infrastructure.point_plan import magnitude_plan
     from modules.measurements.models import Reading
 
-    technique = visit.service_order.technique
-    magnitudes = list(Magnitude.objects.filter(technique=technique).select_related("default_unit"))
-    points = list(equipment.points.filter(is_active=True))
     Reading.objects.bulk_create([
         Reading(
             company_id=company_id, taken_at=visit.visited_at, point=point, service_visit=visit,
             magnitude=magnitude, value=None, unit=magnitude.default_unit,
             aggregation=magnitude.default_aggregation, quality="not_measured",
         )
-        for point in points
-        for magnitude in magnitudes
+        for point, magnitude in magnitude_plan(equipment, visit.service_order.technique)
     ])
 
 
