@@ -146,6 +146,8 @@ class Spectrum(TenantModel):
         ("velocity", "Velocidad"), ("envelope", "Envolvente"),
         ("acceleration", "Aceleración"), ("demodulation", "Demodulación"),
         ("waveform", "Forma de onda"),
+        # The SKF software exports its waterfall plots as images (V3-15).
+        ("waterfall", "Cascada"),
     ]
 
     point = models.ForeignKey(
@@ -181,7 +183,9 @@ class Spectrum(TenantModel):
     image = models.ForeignKey(
         "media.MediaAsset", on_delete=models.SET_NULL, null=True, blank=True, related_name="spectra"
     )
-    caption = models.CharField(max_length=300, blank=True)
+    # The finding, often several sentences: in the reports it is the text under
+    # the capture.
+    caption = models.TextField(blank=True)
     diagnosis = models.ManyToManyField("diagnostics.FaultMode", blank=True, related_name="spectra")
 
     class Meta:

@@ -20,10 +20,13 @@ from rest_framework.views import APIView
 from modules.assets.models import MeasurementPoint
 from modules.measurements.domain.spectra import SpectrumFormatError, parse_csv
 from modules.measurements.models import Spectrum
+from modules.media.domain.formats import is_image
 from modules.media.infrastructure.local_store import store
+from modules.media.infrastructure.uploads import UploadRejectedError, store_upload
 from modules.security.application.access import build_actor
 
 MAX_CSV_BYTES = 8 * 1024 * 1024
+MAX_CAPTION = 2000
 PAGE_SIZE = 50
 
 
@@ -36,21 +39,25 @@ class SpectrumCollectionView(APIView):
             Spectrum.objects.for_company(request.company_id)
             .select_related("point__equipment", "image", "unit")
             .prefetch_related("diagnosis")
+            .order_by("-taken_at", "-id")
         )
-        if request.query_params.get("point"):
-            queryset = queryset.filter(point_id=int(request.query_params["point"]))
-        elif request.query_params.get("equipment"):
-            queryset = queryset.filter(
-                point__equipment_id=int(request.query_params["equipment"])
-            )
-        if request.query_params.get("type"):
-            queryset = queryset.filter(spectrum_type=request.query_params["type"])
-        if request.query_params.get("visit"):
-            queryset = queryset.filter(service_visit_id=int(request.query_params["visit"]))
+        params = request.query_params
+        if params.get("point"):
+            queryset = queryset.filter(point_id=int(params["point"]))
+        elif params.get("equipment"):
+            queryset = queryset.filter(point__equipment_id=int(params["equipment"]))
+        elif params.get("group"):
+            # Every point of the train (V3-09): a spectrum of the pump must be
+            # visible from the motor of the same train.
+            queryset = queryset.filter(point__equipment__asset_group_id=int(params["group"]))
+        if params.get("type"):
+            queryset = queryset.filter(spectrum_type=params["type"])
+        if params.get("visit"):
+            queryset = queryset.filter(service_visit_id=int(params["visit"]))
 
-        limit = min(int(request.query_params.get("limit") or PAGE_SIZE), 200)
+        rows, next_cursor = _page(queryset, params)
         backend = store()
-        return Response([_payload(row, backend) for row in queryset[:limit]])
+        return Response({"items": [_payload(row, backend) for row in rows], "next_cursor": next_cursor})
 
     def post(self, request):
         _require(request, "vibration.add_reading", "measurements.add_reading")
@@ -74,11 +81,18 @@ class SpectrumCollectionView(APIView):
             window=(request.data.get("window") or "")[:20],
             averages=_int(request.data.get("averages")),
             image_id=request.data.get("image") or None,
-            caption=(request.data.get("caption") or "").strip()[:300],
+            caption=(request.data.get("caption") or "").strip()[:MAX_CAPTION],
         )
 
+        capture = request.FILES.get("capture")
+        if capture is not None:
+            spectrum.image = _store_capture(request, capture, point)
         upload = request.FILES.get("data")
         if upload is not None:
+            if is_image(upload.name):
+                raise ValidationError(
+                    "Eso es una imagen: súbela como captura, no como archivo de datos"
+                )
             spectrum = _attach_curve(spectrum, upload, request.company_id)
         elif spectrum.image_id is None:
             raise ValidationError(
@@ -110,7 +124,7 @@ class SpectrumDetailView(APIView):
         spectrum = _get(request, spectrum_id)
 
         if "caption" in request.data:
-            spectrum.caption = (request.data.get("caption") or "").strip()[:300]
+            spectrum.caption = (request.data.get("caption") or "").strip()[:MAX_CAPTION]
         for field in ("spectrum_type", "window"):
             if field in request.data:
                 setattr(spectrum, field, request.data.get(field) or getattr(spectrum, field))
@@ -152,6 +166,37 @@ class SpectrumCurveView(APIView):
         return Response(json.loads(gzip.decompress(raw).decode()))
 
 
+def _store_capture(request, capture, point):
+    """The image the instrument's software exported, kept as a media asset of
+    the point so it also shows in the machine's gallery."""
+    if not is_image(capture.name):
+        raise ValidationError("La captura debe ser una imagen (PNG o JPG)")
+    try:
+        asset, _ = store_upload(
+            company_id=request.company_id, upload=capture, kind="spectrum_image",
+            owner_type="point", owner_id=point.id, user=request.user,
+        )
+    except UploadRejectedError as cause:
+        raise ValidationError(str(cause)) from cause
+    return asset
+
+
+def _page(queryset, params) -> tuple[list, str | None]:
+    """Keyset on (taken_at, id), newest first, like the gallery."""
+    limit = min(int(params.get("limit") or PAGE_SIZE), 200)
+    cursor = params.get("cursor")
+    if cursor:
+        moment, _, last_id = cursor.partition("|")
+        queryset = queryset.filter(taken_at__lte=moment).exclude(
+            taken_at=moment, id__gte=int(last_id or 0)
+        )
+    rows = list(queryset[: limit + 1])
+    if len(rows) <= limit:
+        return rows, None
+    tail = rows[limit - 1]
+    return rows[:limit], f"{tail.taken_at.isoformat()}|{tail.id}"
+
+
 def _attach_curve(spectrum: Spectrum, upload, company_id: int) -> Spectrum:
     if upload.size > MAX_CSV_BYTES:
         raise ValidationError("El archivo de datos supera los 8 MB")
@@ -184,7 +229,11 @@ def _payload(spectrum: Spectrum, backend) -> dict:
         "id": spectrum.id,
         "point_id": spectrum.point_id,
         "point_label": spectrum.point.label,
+        "point_number": spectrum.point.number,
+        "point_axis": spectrum.point.axis,
         "equipment_id": spectrum.point.equipment_id,
+        "equipment_name": spectrum.point.equipment.name,
+        "component_order": spectrum.point.equipment.order_in_group,
         "taken_at": spectrum.taken_at.isoformat(),
         "spectrum_type": spectrum.spectrum_type,
         "visit_id": spectrum.service_visit_id,

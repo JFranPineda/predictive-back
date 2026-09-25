@@ -52,7 +52,8 @@ class MediaAsset(TenantModel):
     uploaded_by = models.ForeignKey("security.User", on_delete=models.SET_NULL, null=True, related_name="+")
 
     class Meta:
-        unique_together = [("company", "checksum_sha256")]
+        # Stored once per content, listed once per owner (see uploads.py).
+        unique_together = [("company", "checksum_sha256", "owner_type", "owner_id")]
         indexes = [
             models.Index(fields=["company", "owner_type", "owner_id"]),
             models.Index(fields=["processing_state", "created_at"]),

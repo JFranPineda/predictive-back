@@ -8,7 +8,6 @@ visit, and each keeps what it is in `kind`.
 
 from __future__ import annotations
 
-import io
 from dataclasses import dataclass
 
 from django.db.models import Count
@@ -19,18 +18,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.core.infrastructure.audit import record
-from modules.media.domain.derivatives import Variant, storage_key
-from modules.media.infrastructure.local_store import checksum, store
+from modules.media.infrastructure.local_store import store
+from modules.media.infrastructure.uploads import UploadRejectedError, release, store_upload
 from modules.media.models import MediaAsset
 from modules.security.application.access import build_actor
 from modules.security.domain.policies import MediaRef, can_delete_media, can_edit_media
 
-ACCEPTED = {
-    "jpg": "jpeg", "jpeg": "jpeg", "png": "png", "heic": "heic", "heif": "heic",
-    "webp": "webp", "tif": "tiff", "tiff": "tiff", "pdf": "document",
-}
-MAX_BYTES = 40 * 1024 * 1024
-THUMB_EDGE = 320
 PAGE_SIZE = 60
 MAX_PAGE_SIZE = 200
 # exif, thermal_meta and geo are fat JSON columns nothing in a grid reads.
@@ -66,48 +59,19 @@ class MediaCollectionView(APIView):
         actor = build_actor(request.user, request.company_id)
         if not actor.has("media.upload"):
             raise PermissionDenied("Falta el permiso media.upload")
-
-        upload = request.FILES.get("file")
-        if upload is None:
-            raise ValidationError("No llegó ningún archivo")
-        if upload.size > MAX_BYTES:
-            raise ValidationError(f"El archivo supera los {MAX_BYTES // 1024 // 1024} MB")
-
-        extension = (upload.name.rsplit(".", 1)[-1] if "." in upload.name else "").lower()
-        if extension not in ACCEPTED:
-            raise ValidationError(f"Formato no aceptado: .{extension}")
-
-        payload = upload.read()
-        digest = checksum(payload)
-        # Deduplicated by content: the same photo re-sent from the field costs
-        # nothing and does not clutter the gallery twice.
-        existing = MediaAsset.objects.for_company(request.company_id).filter(
-            checksum_sha256=digest
-        ).first()
-        if existing is not None:
-            return Response(_payload(existing, rights=_rights(request, [existing])), status=200)
-
-        backend = store()
-        key = storage_key(request.company_id, digest, None, extension)
-        backend.put(key, payload, content_type=upload.content_type or "")
-
-        asset = MediaAsset.objects.create(
-            company_id=request.company_id,
-            kind=request.data.get("kind") or "photo",
-            owner_type=request.data.get("owner_type") or "visit",
-            owner_id=int(request.data.get("owner_id") or 0),
-            original_key=key,
-            original_format=ACCEPTED[extension],
-            original_bytes=len(payload),
-            checksum_sha256=digest,
-            caption=(request.data.get("caption") or "").strip()[:300],
-            uploaded_by=request.user,
-            processing_state="pending",
-            **_ownership(request.data.get("owner_type") or "visit",
-                         int(request.data.get("owner_id") or 0)),
-        )
-        _make_thumbnail(asset, payload, backend)
-        return Response(_payload(asset, rights=_rights(request, [asset])), status=201)
+        try:
+            asset, created = store_upload(
+                company_id=request.company_id,
+                upload=request.FILES.get("file"),
+                kind=request.data.get("kind") or "photo",
+                owner_type=request.data.get("owner_type") or "visit",
+                owner_id=int(request.data.get("owner_id") or 0),
+                caption=request.data.get("caption") or "",
+                user=request.user,
+            )
+        except UploadRejectedError as cause:
+            raise ValidationError(str(cause)) from cause
+        return Response(_payload(asset, rights=_rights(request, [asset])), status=201 if created else 200)
 
 
 class MediaDetailView(APIView):
@@ -129,21 +93,12 @@ class MediaDetailView(APIView):
             raise PermissionDenied(
                 "Solo quien subió el archivo puede quitarlo, y mientras la visita siga abierta"
             )
-        backend = store()
-        for key in [asset.original_key, *(d.get("key") for d in asset.derivatives.values())]:
-            if key:
-                try:
-                    backend.delete(key)
-                except (OSError, ValueError):
-                    # The row is what the app reads; a missing file must not
-                    # leave an undeletable record behind.
-                    pass
         record(
             request, "media.deleted", object_type="media", object_id=asset.id,
             before={"kind": asset.kind, "owner_type": asset.owner_type,
                     "owner_id": asset.owner_id, "caption": asset.caption},
         )
-        asset.delete()
+        release(asset)
         return Response(status=204)
 
 
@@ -152,38 +107,6 @@ def _get(request, media_id: int) -> MediaAsset:
     if asset is None:
         raise ValidationError("Ese archivo no existe")
     return asset
-
-
-def _make_thumbnail(asset: MediaAsset, payload: bytes, backend) -> None:
-    """A gallery must not download twenty full-size phone photos.
-
-    Only the cheap preview is made here; the heavy conversion is the nightly
-    job's work (doc 05), and a thermogram is never re-encoded because its
-    temperature matrix lives in the original.
-    """
-    if asset.original_format in ("heic", "document", "tiff"):
-        asset.processing_state = "pending"
-        asset.save(update_fields=["processing_state"])
-        return
-    try:
-        from PIL import Image, ImageOps
-
-        image = ImageOps.exif_transpose(Image.open(io.BytesIO(payload)))
-        asset.width, asset.height = image.size
-        image.thumbnail((THUMB_EDGE, THUMB_EDGE))
-        buffer = io.BytesIO()
-        image.convert("RGB").save(buffer, format="JPEG", quality=72)
-        key = storage_key(asset.company_id, asset.checksum_sha256, Variant.THUMB, "jpg")
-        backend.put(key, buffer.getvalue(), content_type="image/jpeg")
-        asset.derivatives = {"thumb": {"key": key, "w": image.width, "h": image.height}}
-        # Still pending: the gallery has its preview, but card and full are the
-        # nightly job's work. Marking it done here is what left every asset
-        # with a single 320px derivative and nothing else.
-        asset.processing_state = "pending"
-    except Exception:
-        # An unreadable image still uploads; the original is what matters.
-        asset.processing_state = "failed"
-    asset.save(update_fields=["derivatives", "width", "height", "processing_state", "updated_at"])
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,29 +165,6 @@ def _payload(asset: MediaAsset, backend=None, rights: dict[int, _Rights] | None 
         "created_at": asset.created_at.isoformat(),
         "can_edit": allowed.edit,
         "can_delete": allowed.delete,
-    }
-
-
-def _ownership(owner_type: str, owner_id: int) -> dict:
-    """The equipment an upload belongs to, worked out once and stored.
-
-    A gallery of thousands cannot join visit → equipment on every page, and
-    the answer never changes after the upload.
-    """
-    if owner_type != "visit" or not owner_id:
-        return {}
-    from modules.services.models import ServiceVisit
-
-    visit = (
-        ServiceVisit.objects.filter(id=owner_id)
-        .values("equipment_id", "visited_at")
-        .first()
-    )
-    if visit is None:
-        return {}
-    return {
-        "equipment_ref": visit["equipment_id"],
-        "captured_on": visit["visited_at"].date(),
     }
 
 
