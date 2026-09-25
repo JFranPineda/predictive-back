@@ -2,6 +2,6 @@
 `infrastructure/`. This re-export is the one line of glue that keeps both true:
 the models stay in the infrastructure layer, and Django still finds them."""
 
-from modules.licensing.infrastructure.models import Tenant, LicenseRecord, LicenseEvent  # noqa: F401
+from modules.licensing.infrastructure.models import LicenseEvent, LicenseRecord, Tenant  # noqa: F401
 
 __all__ = ["Tenant", "LicenseRecord", "LicenseEvent"]

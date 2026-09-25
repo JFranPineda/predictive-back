@@ -9,6 +9,7 @@ from __future__ import annotations
 from django.conf import settings
 from django.db import transaction
 from django.db.models import ProtectedError
+from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -16,6 +17,7 @@ from rest_framework.views import APIView
 
 from modules.assets.domain.asset_code import generate as generate_code
 from modules.assets.domain.point_layout import ComponentSpec, next_number, plan_layout
+from modules.assets.infrastructure.plan_counts import equipment_in_plan, plants_in_plan
 from modules.assets.models import (
     Area,
     AssetGroup,
@@ -25,6 +27,7 @@ from modules.assets.models import (
     Plant,
     Sector,
 )
+from modules.core.infrastructure.audit import record
 from modules.security.application.access import build_actor
 
 
@@ -41,19 +44,20 @@ class AssetAdminView(APIView):
         return model.objects.for_company(request.company_id)
 
 
-def _check_licence(request, resource: str, current_count: int) -> None:
-    """A plan sells a ceiling; this is where it is enforced."""
-    from modules.licensing.application.license_service import assert_within_limit
+def _check_licence(request, resource: str, current_count: int, adding: int = 1) -> None:
+    """A plan sells a ceiling; this is where growth stops at it. The refusal
+    is audited: the administrator asks "why could we not add it" later."""
+    from modules.licensing.application.license_service import PlanLimitReachedError, ensure_room
 
     tenant = getattr(request, "tenant", None)
     if tenant is None:
         return
-    if not assert_within_limit(
-        tenant.code, resource, current_count, secret=settings.LICENSE_SECRET
-    ):
-        raise ValidationError(
-            f"El plan contratado no permite más {resource}. Contacta con el proveedor."
-        )
+    try:
+        ensure_room(tenant.code, resource, current_count, secret=settings.LICENSE_SECRET, adding=adding)
+    except PlanLimitReachedError as cause:
+        record(request, "license.limit_reached", object_type=resource,
+               after={"used": current_count, "adding": adding})
+        raise ValidationError(str(cause)) from cause
 
 
 class PlantCollectionView(AssetAdminView):
@@ -69,7 +73,7 @@ class PlantCollectionView(AssetAdminView):
         name = (request.data.get("name") or "").strip()
         if not name:
             raise ValidationError("El nombre es obligatorio")
-        _check_licence(request, "plants", self.scoped(Plant, request).count())
+        _check_licence(request, "plants", plants_in_plan(request.company_id))
 
         code = _slug(request.data.get("code") or name)
         if self.scoped(Plant, request).filter(code=code).exists():
@@ -261,7 +265,7 @@ class EquipmentCollectionView(AssetAdminView):
         equipment_type = request.data.get("equipment_type")
         if not name or not equipment_type:
             raise ValidationError("El nombre y el tipo de equipo son obligatorios")
-        _check_licence(request, "equipment", self.scoped(Equipment, request).count())
+        _check_licence(request, "equipment", equipment_in_plan(request.company_id))
 
         taken = set(self.scoped(Equipment, request).values_list("asset_code", flat=True))
         component = _component_for(group, request.data.get("group_component"), equipment_type)
@@ -314,14 +318,33 @@ class EquipmentDetailView(AssetAdminView):
             equipment.applied_standard_id = request.data["applied_standard"] or None
         if "machine_class" in request.data:
             equipment.machine_class_id = request.data["machine_class"] or None
+        if request.data.get("reactivate") and equipment.retired_at:
+            # Bringing a machine back takes a slot like creating one.
+            _check_licence(request, "equipment", equipment_in_plan(request.company_id))
+            equipment.retired_at = None
+            equipment.availability_status = None
         equipment.save()
         return Response({"id": equipment.id, "name": equipment.name})
 
     def delete(self, request, equipment_id: int):
+        """A machine with points is retired, never destroyed: its history stays
+        readable and it stops counting against the plan. Equipment has no
+        `is_active` flag, so the generic soft delete failed with a 500."""
         self.require(request)
         equipment = _get(self.scoped(Equipment, request), equipment_id, "equipo")
-        readings = MeasurementPoint.objects.filter(equipment=equipment).count()
-        return _soft_delete(equipment, readings, "puntos")
+        points = MeasurementPoint.objects.filter(equipment=equipment).count()
+        if not points:
+            equipment.delete()
+            return Response(status=204)
+        from modules.thresholds.models import Status
+
+        equipment.retired_at = timezone.now().date()
+        equipment.availability_status = (
+            Status.objects.for_company(request.company_id).filter(code="retired").first()
+        )
+        equipment.save(update_fields=["retired_at", "availability_status"])
+        record(request, "equipment.retired", object_type="equipment", object_id=equipment.id)
+        return Response({"id": equipment.id, "retired": True, "reason": f"tiene {points} puntos"})
 
 
 class PointCollectionView(AssetAdminView):

@@ -20,10 +20,10 @@ from modules.licensing.domain.license import (
     LicenseError,
     LicenseStatus,
     LicenseVerdict,
-    check_limit,
     evaluate,
     verify,
 )
+from modules.licensing.domain.usage import Usage, limit_message
 
 # How often the same non-fatal condition is written to the event log. Without
 # this, a blocked tenant writes one row per request.
@@ -63,18 +63,30 @@ def current_verdict(tenant_code: str, *, secret: str, suspended: bool = False) -
     return verdict
 
 
-def assert_within_limit(tenant_code: str, resource: str, current_count: int, *, secret: str) -> bool:
+class PlanLimitReachedError(Exception):
+    """One more would exceed the plan; the message says so in the customer's words."""
+
+
+def plan_usage(tenant_code: str, resource: str, used: int, *, secret: str) -> Usage:
+    """How much of the plan is used. No licence on record means no ceiling
+    (a development database); an invalid one leaves no room at all."""
     record = _latest_record(tenant_code)
     if record is None:
-        return True
+        return Usage(resource, used, None)
     try:
         license_ = verify(record.token, secret)
     except LicenseError:
-        return False
-    allowed = check_limit(license_, resource, current_count)
-    if not allowed:
-        _log(tenant_code, "limit_reached", f"{resource}={current_count}")
-    return allowed
+        return Usage(resource, used, 0)
+    return Usage(resource, used, license_.limits.limit_for(resource))
+
+
+def ensure_room(tenant_code: str, resource: str, used: int, *, secret: str, adding: int = 1) -> Usage:
+    """All or nothing: a load that does not fit whole creates none of it."""
+    usage = plan_usage(tenant_code, resource, used, secret=secret)
+    if not usage.fits(adding):
+        _log(tenant_code, "limit_reached", f"{resource}={used}+{adding}")
+        raise PlanLimitReachedError(limit_message(usage, adding))
+    return usage
 
 
 def _latest_record(tenant_code: str):

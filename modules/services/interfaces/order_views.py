@@ -20,7 +20,7 @@ PAGE_SIZE = 25
 
 
 class ServiceOrderListView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = (IsAuthenticated,)
 
     def get(self, request):
         language = getattr(request, "language", "es")
@@ -66,7 +66,7 @@ def _named(row, name: str) -> dict | None:
 class ServiceProviderView(APIView):
     """The companies that execute services: a short catalogue per customer."""
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = (IsAuthenticated,)
 
     def get(self, request):
         rows = ServiceProvider.objects.for_company(request.company_id)
@@ -91,7 +91,7 @@ class ServiceProviderView(APIView):
 
 
 class ServiceProviderDetailView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = (IsAuthenticated,)
 
     def patch(self, request, provider_id: int):
         _require_manage(request)
@@ -117,7 +117,7 @@ def _provider(row: ServiceProvider) -> dict:
 class AnalystListView(APIView):
     """Who can be named as the analyst of an order."""
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = (IsAuthenticated,)
 
     def get(self, request):
         return Response(analysts_of(request.company_id))

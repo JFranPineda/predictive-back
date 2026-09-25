@@ -453,6 +453,24 @@ class Command(BaseCommand):
             created[blueprint.code] = kind
         return created
 
+    def _ensure_plan_room(self, company, adding: int) -> None:
+        """Checked before writing anything: a load the plan cannot hold creates
+        none of its machines (V3-36)."""
+        from django.conf import settings
+
+        from modules.assets.infrastructure.plan_counts import equipment_in_plan
+        from modules.licensing.application.license_service import PlanLimitReachedError, ensure_room
+        from modules.licensing.infrastructure.context import current_tenant
+
+        tenant = current_tenant()
+        if not tenant:
+            return
+        try:
+            ensure_room(tenant, "equipment", equipment_in_plan(company.id),
+                        secret=settings.LICENSE_SECRET, adding=adding)
+        except PlanLimitReachedError as cause:
+            raise CommandError(str(cause)) from cause
+
     def _assets(self, company, plant, rgp_path, standards, statuses, kinds) -> list[Equipment]:
         from modules.assets.infrastructure.importers.rgp_excel import read_rgp
 
@@ -470,7 +488,9 @@ class Command(BaseCommand):
         tac = standards["technical_associates"]
         class_iii = MachineClass.objects.filter(standard=iso, code="class_iii").first()
 
-        for row in read_rgp(rgp_path):
+        rows = list(read_rgp(rgp_path))
+        self._ensure_plan_room(company, len(rows))
+        for row in rows:
             area = areas.get(row.area_code)
             if area is None:
                 area = Area.objects.create(
