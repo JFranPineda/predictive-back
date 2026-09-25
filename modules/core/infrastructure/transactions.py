@@ -10,17 +10,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import wraps
-from typing import ParamSpec, TypeVar
 
 from django.db import transaction
 
 from modules.licensing.infrastructure.context import current_alias
 
-P = ParamSpec("P")
-R = TypeVar("R")
 
-
-def tenant_atomic(function: Callable[P, R]) -> Callable[P, R]:
+def tenant_atomic[**P, R](function: Callable[P, R]) -> Callable[P, R]:
     """Runs the function in a transaction on the current tenant's database.
     The alias is resolved per call, since the tenant is per request."""
 
