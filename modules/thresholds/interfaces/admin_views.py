@@ -9,13 +9,13 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 
-from django.db import transaction
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.core.domain.i18n import SUPPORTED_LANGUAGES
+from modules.core.infrastructure.transactions import tenant_atomic
 from modules.measurements.models import Magnitude, Technique
 from modules.security.application.access import build_actor
 from modules.thresholds.domain.entities import (
@@ -104,7 +104,7 @@ def _standard_payload(row: ThresholdStandard, language: str) -> dict:
 class StandardCollectionView(PermissionedView):
     required_permission = "thresholds.manage_standard"
 
-    @transaction.atomic
+    @tenant_atomic
     def post(self, request):
         self.require(request)
         language = getattr(request, "language", "es")
@@ -133,7 +133,7 @@ class StandardCollectionView(PermissionedView):
 class StandardDetailView(PermissionedView):
     required_permission = "thresholds.manage_standard"
 
-    @transaction.atomic
+    @tenant_atomic
     def patch(self, request, standard_id: int):
         self.require(request)
         language = getattr(request, "language", "es")
@@ -264,7 +264,7 @@ class StatusCollectionView(PermissionedView):
 class ThresholdSetCollectionView(PermissionedView):
     required_permission = "thresholds.manage_set"
 
-    @transaction.atomic
+    @tenant_atomic
     def post(self, request):
         self.require(request)
         return Response(_save_set(request, None), status=201)
@@ -273,7 +273,7 @@ class ThresholdSetCollectionView(PermissionedView):
 class ThresholdSetDetailView(PermissionedView):
     required_permission = "thresholds.manage_set"
 
-    @transaction.atomic
+    @tenant_atomic
     def patch(self, request, set_id: int):
         self.require(request)
         existing = ThresholdSet.objects.for_company(request.company_id).filter(id=set_id).first()

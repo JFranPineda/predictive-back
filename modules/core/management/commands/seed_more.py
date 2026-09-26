@@ -22,10 +22,10 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from django.core.management.base import BaseCommand
-from django.db import transaction
 from django.utils import timezone
 
 from modules.assets.models import Equipment, MeasurementPoint
+from modules.core.infrastructure.transactions import tenant_atomic
 from modules.core.models import Company
 from modules.diagnostics.models import FaultMode
 from modules.measurements.models import (
@@ -124,7 +124,7 @@ class Command(BaseCommand):
         parser.add_argument("--spectra", type=int, default=400)
         parser.add_argument("--seed", type=int, default=20260918)
 
-    @transaction.atomic
+    @tenant_atomic
     def handle(self, *args, **options) -> None:
         random.seed(options["seed"])
         company = Company.objects.first()

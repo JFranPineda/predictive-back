@@ -7,7 +7,6 @@ parent belongs to the caller's company, and the licence still has room.
 from __future__ import annotations
 
 from django.conf import settings
-from django.db import transaction
 from django.db.models import ProtectedError
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -29,6 +28,7 @@ from modules.assets.models import (
     Sector,
 )
 from modules.core.infrastructure.audit import record
+from modules.core.infrastructure.transactions import tenant_atomic
 from modules.security.application.access import build_actor
 
 
@@ -256,7 +256,7 @@ class AssetGroupDetailView(AssetAdminView):
 
 
 class EquipmentCollectionView(AssetAdminView):
-    @transaction.atomic
+    @tenant_atomic
     def post(self, request):
         self.require(request)
         group = self.scoped(AssetGroup, request).filter(id=request.data.get("asset_group")).first()

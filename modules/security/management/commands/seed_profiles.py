@@ -15,8 +15,8 @@ Idempotent: it updates the profiles to this definition every time it runs.
 from __future__ import annotations
 
 from django.core.management.base import BaseCommand
-from django.db import transaction
 
+from modules.core.infrastructure.transactions import tenant_atomic
 from modules.core.models import Company
 from modules.security.models import Membership, Permission, Role, User
 
@@ -96,7 +96,7 @@ class Command(BaseCommand):
         parser.add_argument("--demo-users", action="store_true")
         parser.add_argument("--password", default="predictive2026")
 
-    @transaction.atomic
+    @tenant_atomic
     def handle(self, *args, **options) -> None:
         company = Company.objects.first()
         if company is None:

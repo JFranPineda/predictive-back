@@ -10,6 +10,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from modules.licensing.infrastructure.context import current_alias
 from modules.security.application.access import build_actor
 from modules.security.domain.policies import can_change_order_status
 from modules.services.domain.order_filter import order_filter_from
@@ -80,7 +81,7 @@ class ServiceProviderView(APIView):
         if not name:
             raise ValidationError("El nombre de la empresa es obligatorio")
         try:
-            with transaction.atomic():
+            with transaction.atomic(using=current_alias()):
                 provider = ServiceProvider.objects.create(
                     company_id=request.company_id, name=name,
                     tax_id=(request.data.get("tax_id") or "").strip(),

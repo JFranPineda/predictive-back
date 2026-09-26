@@ -18,7 +18,6 @@ from decimal import Decimal
 from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
 from django.utils import timezone
 
 from modules.assets.domain.asset_code import generate as generate_code
@@ -36,6 +35,7 @@ from modules.assets.models import (
     PointTemplate,
     Sector,
 )
+from modules.core.infrastructure.transactions import tenant_atomic
 from modules.core.models import Company, InstalledModule
 from modules.diagnostics.domain.catalogue import ALL_FAULTS
 from modules.diagnostics.models import EquipmentLogEntry, FaultMode
@@ -180,7 +180,7 @@ class Command(BaseCommand):
         parser.add_argument("--rounds", type=int, default=6, help="Monthly rounds to generate")
         parser.add_argument("--seed", type=int, default=20140613)
 
-    @transaction.atomic
+    @tenant_atomic
     def handle(self, *args, **options):
         docs = Path(options["docs"]).expanduser().resolve()
         rgp = docs / "VIBRACION 2014 AMBEV - JUNIO.xls"

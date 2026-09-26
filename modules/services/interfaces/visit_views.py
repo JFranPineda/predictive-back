@@ -9,12 +9,12 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 
-from django.db import transaction
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from modules.core.infrastructure.transactions import tenant_atomic
 from modules.diagnostics.models import EquipmentLogEntry
 from modules.measurements.domain.axes import axis_rank
 from modules.measurements.models import Reading
@@ -151,7 +151,7 @@ class VisitReadingsView(APIView):
 
     permission_classes = [IsAuthenticated]
 
-    @transaction.atomic
+    @tenant_atomic
     def patch(self, request, visit_id: int):
         visit = _load(request, visit_id)
         actor = build_actor(request.user, request.company_id)

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 
-from django.db import transaction
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from modules.core.infrastructure.transactions import tenant_atomic
 from modules.operating_data.domain.precision import decimals_for, to_precision
 from modules.operating_data.models import OperatingParameter, OperatingReading
 from modules.security.application.access import build_actor
@@ -166,7 +166,7 @@ class VisitOperatingView(APIView):
             or visit.equipment.equipment_type in parameter.applies_to
         ])
 
-    @transaction.atomic
+    @tenant_atomic
     def put(self, request, visit_id: int):
         visit = _load(request, visit_id)
         actor = build_actor(request.user, request.company_id)

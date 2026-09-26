@@ -16,7 +16,9 @@ from rest_framework.views import APIView
 
 from modules.assets.models import Equipment
 from modules.core.infrastructure.audit import record
+from modules.core.infrastructure.transactions import tenant_atomic
 from modules.diagnostics.models import EquipmentLogEntry
+from modules.licensing.infrastructure.context import current_alias
 from modules.measurements.domain.families import is_offered
 from modules.measurements.models import Instrument, Technique
 from modules.security.application.access import build_actor
@@ -83,7 +85,7 @@ class ServiceOrderDetailView(ServiceAdminView):
     """Plant and technique are what every visit of the round hangs off, so they
     are never changed here; the form shows them locked."""
 
-    @transaction.atomic
+    @tenant_atomic
     def patch(self, request, order_id: int):
         self.require(request, "services.manage_order")
         order = _find(ServiceOrder.objects.for_company(request.company_id), order_id, "orden")
@@ -110,7 +112,7 @@ class ServiceOrderDetailView(ServiceAdminView):
         if order.visits.exists():
             # Cancelling keeps the visits and their readings readable; it is a
             # change of status like any other.
-            with transaction.atomic():
+            with transaction.atomic(using=current_alias()):
                 self._change_status(request, order, CANCELLED)
                 order.save(update_fields=["status"])
             return Response({"id": order.id, "status": CANCELLED, "cancelled": True})
@@ -145,7 +147,7 @@ def _analyst(request, user_id) -> int | None:
 
 
 class VisitCollectionView(ServiceAdminView):
-    @transaction.atomic
+    @tenant_atomic
     def post(self, request):
         self.require(request, "measurements.add_reading")
         order = _find(

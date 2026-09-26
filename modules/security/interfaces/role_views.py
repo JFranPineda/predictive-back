@@ -8,12 +8,12 @@ readable.
 
 from __future__ import annotations
 
-from django.db import transaction
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from modules.core.infrastructure.transactions import tenant_atomic
 from modules.security.application.access import build_actor
 from modules.security.domain.actor import Role as RoleEnum
 from modules.security.models import Membership, Permission, Role
@@ -106,7 +106,7 @@ class RoleListView(RoleAdminView):
 
 
 class RoleDetailView(RoleAdminView):
-    @transaction.atomic
+    @tenant_atomic
     def patch(self, request, role_id: int):
         self.require(request)
         role = _get(self.scoped(request), role_id)
