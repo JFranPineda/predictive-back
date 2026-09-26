@@ -20,6 +20,7 @@ DEFAULT_DISPLAY_ORDER: dict[str, int] = {
     "delta_temp_ambient": 42,
     "us_db": 50,
     "thickness_mm": 60,
+    "roller_thickness": 61,
     "viscosity_40": 70,
     "water_ppm": 71,
     "dielectric_kv": 80,

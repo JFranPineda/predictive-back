@@ -26,6 +26,7 @@ TYPE_ABBREVIATIONS = {
     "fan": "VEN",
     "blower": "SOP",
     "bearing_housing": "CHU",
+    "roller": "ROD",
     "other": "EQP",
 }
 

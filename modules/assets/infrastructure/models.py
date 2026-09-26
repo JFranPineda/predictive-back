@@ -151,7 +151,7 @@ class Equipment(TenantModel):
     TYPES = [
         ("motor", "Motor"), ("pump", "Bomba"), ("compressor", "Compresor"),
         ("gearbox", "Reductor"), ("fan", "Ventilador"), ("blower", "Soplador"),
-        ("bearing_housing", "Chumacera"), ("other", "Otro"),
+        ("bearing_housing", "Chumacera"), ("roller", "Rodillo / polín"), ("other", "Otro"),
     ]
     POSITIONS = [
         ("driver", "Motriz"), ("driven", "Conducido"), ("intermediate", "Intermedio"),
