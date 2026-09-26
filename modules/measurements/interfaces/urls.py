@@ -17,11 +17,14 @@ from modules.measurements.interfaces.spectrum_views import (
     SpectrumCurveView,
     SpectrumDetailView,
 )
+from modules.measurements.interfaces.thermogram_views import ThermogramView
 from modules.measurements.interfaces.train_views import TrainIndexView
 from modules.measurements.interfaces.views import TrendView
 
 urlpatterns = [
     path("measurement-trains/", TrainIndexView.as_view(), name="measurement-trains"),
+    path("service-visits/<int:visit_id>/thermograms/", ThermogramView.as_view(),
+         name="visit-thermograms"),
     path("asset-groups/<int:group_id>/matrix/", TrainMatrixView.as_view(), name="train-matrix"),
     path("asset-groups/<int:group_id>/matrix/export/", TrainRecordExportView.as_view(),
          name="train-matrix-export"),

@@ -102,6 +102,7 @@ def build_matrix(request, equipment: Equipment, scope: str) -> dict:
             "unit",
             "condition_status",
             "service_visit__service_order__technique",
+            "image",
         )
         .order_by("taken_at", "point__number", "point__axis")
     )
@@ -181,16 +182,25 @@ def build_matrix(request, equipment: Equipment, scope: str) -> dict:
                 "cells": {},
             },
         )
-        row["cells"][column_key] = {
-            "reading_id": reading.id,
-            "value": str(reading.value) if reading.value is not None else None,
-            "status_code": reading.condition_status.code if reading.condition_status else None,
-            "status_color": reading.condition_status.color if reading.condition_status else None,
-            # A value no standard judged: shown as "sin norma", not as healthy.
-            "graded": reading.condition_status_id is not None or reading.threshold_set_id is not None,
-            "quality": reading.quality,
-            "visit_id": reading.service_visit_id,
-        }
+        existing_cell = row["cells"].get(column_key)
+        # A magnitude read once per bearing seeds one row per axis-point
+        # (H, V, A) that all collapse into this one row and column. When only
+        # one of the three actually carries a value — a thermogram taken on
+        # 3H while 3V and 3A are still the seeded "not measured" rows — the
+        # iteration order must not let an empty sibling erase the real one.
+        if existing_cell is None or existing_cell["value"] is None or reading.value is not None:
+            row["cells"][column_key] = {
+                "reading_id": reading.id,
+                "value": str(reading.value) if reading.value is not None else None,
+                "status_code": reading.condition_status.code if reading.condition_status else None,
+                "status_color": reading.condition_status.color if reading.condition_status else None,
+                # A value no standard judged: shown as "sin norma", not as healthy.
+                "graded": reading.condition_status_id is not None or reading.threshold_set_id is not None,
+                "quality": reading.quality,
+                "visit_id": reading.service_visit_id,
+                # A thermogram behind the value (V3-16): the hover thumbnail.
+                "image_url": _thumb_url(reading.image) if reading.image_id else None,
+            }
 
     ordered_columns = sorted(columns.values(), key=lambda column: column["taken_at"])
     return {
@@ -232,6 +242,14 @@ def build_matrix(request, equipment: Equipment, scope: str) -> dict:
             )
         ],
     }
+
+
+def _thumb_url(asset) -> str | None:
+    from modules.media.infrastructure.local_store import store
+
+    backend = store()
+    thumb = (asset.derivatives or {}).get("thumb", {}).get("key")
+    return backend.url(thumb) if thumb else backend.url(asset.original_key)
 
 
 def _train(equipment: Equipment) -> dict:

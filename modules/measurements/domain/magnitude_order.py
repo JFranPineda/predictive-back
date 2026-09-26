@@ -14,6 +14,7 @@ DEFAULT_DISPLAY_ORDER: dict[str, int] = {
     "vel_rms": 10,
     "accel_rms": 20,
     "env_accel": 30,
+    "ir_tmax": 39,
     "temp": 40,
     "delta_temp": 41,
     "delta_temp_ambient": 42,

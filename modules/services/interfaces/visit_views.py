@@ -52,7 +52,7 @@ class VisitDetailView(APIView):
         readings = (
             Reading.objects.for_company(request.company_id)
             .filter(service_visit=visit)
-            .select_related("point", "magnitude", "unit", "condition_status")
+            .select_related("point", "magnitude", "unit", "condition_status", "image")
             .order_by("point__number", "point__axis", "magnitude__code")
         )
 
@@ -78,6 +78,7 @@ class VisitDetailView(APIView):
                 "graded": reading.condition_status_id is not None or reading.threshold_set_id is not None,
                 "quality": reading.quality,
                 "not_measured_reason": reading.not_measured_reason or None,
+                "image_url": _thumb_url(reading.image) if reading.image_id else None,
             })
 
         entries = (
@@ -95,6 +96,7 @@ class VisitDetailView(APIView):
                 "tag": equipment.client_tag or equipment.asset_code,
                 "type": equipment.equipment_type,
                 "asset_group": equipment.asset_group.name,
+                "asset_group_id": equipment.asset_group_id,
                 "area_label": f"{area.code} - {area.name}",
                 "sector": equipment.asset_group.sector.name,
             },
@@ -221,6 +223,14 @@ class VisitEntriesView(APIView):
             "author_id": entry.author_id, "author_name": request.user.get_full_name(),
             "status": entry.status or None, "from_this_visit": True,
         }, status=201)
+
+
+def _thumb_url(asset) -> str | None:
+    from modules.media.infrastructure.local_store import store
+
+    backend = store()
+    thumb = (asset.derivatives or {}).get("thumb", {}).get("key")
+    return backend.url(thumb) if thumb else backend.url(asset.original_key)
 
 
 def _status(row, language: str) -> dict | None:

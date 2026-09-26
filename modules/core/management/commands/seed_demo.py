@@ -40,6 +40,7 @@ from modules.core.models import Company, InstalledModule
 from modules.diagnostics.domain.catalogue import ALL_FAULTS
 from modules.diagnostics.models import EquipmentLogEntry, FaultMode
 from modules.measurements.domain.acceleration import ACCELERATION
+from modules.measurements.domain.thermography import IR_TMAX_SPEC
 from modules.measurements.domain.families import family_for
 from modules.measurements.domain.magnitude_order import display_order_for
 from modules.measurements.models import Instrument, Magnitude, Reading, Technique, Unit
@@ -302,6 +303,16 @@ class Command(BaseCommand):
             template_only=spec.template_only, display_order=display_order_for(spec.code),
             translations={"name": {"es": spec.name_es, "en": spec.name_en}},
         )
+        ir = IR_TMAX_SPEC
+        magnitudes[ir.code] = Magnitude.objects.create(
+            code=ir.code, technique=techniques[ir.technique], name=ir.name_es,
+            default_unit=units[ir.unit], default_aggregation=ir.aggregation,
+            decimals=ir.decimals, per_axis=ir.per_axis, higher_is_worse=ir.higher_is_worse,
+            short_code=ir.short_code, display_order=display_order_for(ir.code),
+            translations={"name": {"es": ir.name_es, "en": ir.name_en}},
+        )
+        techniques[ir.technique].headline_magnitude = "delta_temp"
+        techniques[ir.technique].save(update_fields=["headline_magnitude"])
         return units, techniques, magnitudes
 
     def _profiles(self, company, statuses, techniques) -> None:

@@ -114,6 +114,13 @@ class Reading(TenantModel):
         "thresholds.ThresholdSet", on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
     )
     instrument = models.ForeignKey(Instrument, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+    # The termogram that produced this value (V3-16). Contact and infrared
+    # measure different things, but a thermogram's Tmax and its ΔT are still
+    # ordinary Readings — this is what lets the record of values and the
+    # hover thumbnail work without a parallel model.
+    image = models.ForeignKey(
+        "media.MediaAsset", on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
     operator = models.ForeignKey("security.User", on_delete=models.SET_NULL, null=True, related_name="+")
     quality = models.CharField(max_length=20, choices=QUALITY, default="ok")
     not_measured_reason = models.CharField(max_length=30, choices=NOT_MEASURED_REASONS, blank=True)

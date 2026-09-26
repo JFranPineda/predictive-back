@@ -112,6 +112,26 @@ def temperature_at(raw_value: int, calibration: CameraCalibration) -> float:
     return calibration.planck_b / math.log(ratio) - 273.15
 
 
+def suggest_max_celsius(radiometric: Radiometric) -> float | None:
+    """The hottest pixel, converted — the proposal V3-16 shows the technician
+    before they confirm or correct it.
+
+    Only the plain 16-bit grid is decoded here, with `struct` and nothing
+    else: an embedded PNG needs a real image library to unpack, which is
+    exactly what this module's "standard library only" is protecting. A
+    thermogram whose raw record is a PNG comes back with no proposal, and
+    Tmax is typed by hand — never a crash.
+    """
+    if not radiometric.is_radiometric or radiometric.raw_format != "raw16":
+        return None
+    count = len(radiometric.raw_thermal) // 2
+    if count == 0:
+        return None
+    pixels = struct.unpack(f"<{count}H", radiometric.raw_thermal[: count * 2])
+    celsius = temperature_at(max(pixels), radiometric.calibration)
+    return None if celsius != celsius else round(celsius, 1)  # NaN != NaN
+
+
 def _flir_segment(payload: bytes) -> bytes | None:
     """FLIR splits its record over as many APP1 chunks as it needs."""
 

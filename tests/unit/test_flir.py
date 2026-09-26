@@ -102,3 +102,33 @@ def test_a_count_below_the_offset_is_not_a_temperature():
     )
 
     assert temperature_at(-1000, calibration) != temperature_at(-1000, calibration)
+
+
+def test_suggests_the_hottest_pixel_in_celsius():
+    from modules.media.domain.flir import suggest_max_celsius
+
+    record = bytearray(32)
+    struct.pack_into("<HH", record, 2, 2, 1)
+    # Two pixels; the camera writes little-endian counts. The larger one wins.
+    pixels = bytes(record) + struct.pack("<HH", 12000, 15000)
+    payload = build_jpeg_with_flir({1: pixels, 32: camera_info()})
+
+    suggested = suggest_max_celsius(extract(payload))
+
+    assert suggested is not None
+    assert suggested > 0
+
+
+def test_a_png_raw_record_proposes_nothing():
+    from modules.media.domain.flir import Radiometric, suggest_max_celsius
+
+    png_like = Radiometric(
+        calibration=None, raw_thermal=b"\x89PNG\r\n\x1a\n", raw_format="png",
+    )
+    assert suggest_max_celsius(png_like) is None
+
+
+def test_a_plain_photo_proposes_nothing():
+    from modules.media.domain.flir import suggest_max_celsius
+
+    assert suggest_max_celsius(extract(b"\xff\xd8\xff\xdb\x00\x02\xff\xda\x00\x02")) is None
