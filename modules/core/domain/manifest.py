@@ -39,6 +39,10 @@ class Manifest:
     on_install: str | None = None
     on_uninstall: str | None = None
     on_upgrade: str | None = None
+    # Dotted path to `guard(request, view_func, view_kwargs)`, asked before
+    # every write of the tenants that installed the module. A rule that spans
+    # other modules' data (Fase 3's day close) lives here, not in each view.
+    write_guard: str | None = None
     events_subscribed: tuple[str, ...] = ()
     events_published: tuple[str, ...] = ()
     provides_techniques: tuple[str, ...] = ()

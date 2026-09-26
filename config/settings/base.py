@@ -56,6 +56,8 @@ MIDDLEWARE = [
     "modules.core.infrastructure.middleware.RequestContextMiddleware",
     # Last: it needs the tenant resolved, and runs once the URL is known.
     "modules.core.infrastructure.module_gate.ModuleGateMiddleware",
+    # After the gate: a write to an uninstalled module is a 404, not a veto.
+    "modules.core.infrastructure.write_guard.WriteGuardMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
