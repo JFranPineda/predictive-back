@@ -198,6 +198,9 @@ class VisitAdminView(ServiceAdminView):
         if "duration_min" in request.data:
             visit.duration_min = request.data["duration_min"] or None
         if request.data.get("close"):
+            reason = _close_blocker(visit)
+            if reason:
+                raise ValidationError(reason)
             visit.is_closed = True
             visit.closed_at = timezone.now()
             visit.closed_by = request.user
@@ -317,3 +320,18 @@ def _find(queryset, pk, label: str):
     if row is None:
         raise ValidationError(f"Esa {label} no existe")
     return row
+
+
+def _close_blocker(visit: ServiceVisit) -> str | None:
+    """What `Technique.close_requirement` asks for, checked generically so
+    `services` never has to import the optional module that owns it."""
+    requirement = visit.service_order.technique.close_requirement
+    if requirement == "plan_required":
+        from modules.media.infrastructure.models import MediaAsset
+
+        has_plan = MediaAsset.objects.filter(
+            company_id=visit.company_id, owner_type="visit", owner_id=visit.id,
+            kind="topography_plan",
+        ).exists()
+        return None if has_plan else "Debes subir el plano antes de cerrar la visita"
+    return None

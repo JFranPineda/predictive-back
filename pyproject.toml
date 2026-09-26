@@ -77,4 +77,5 @@ containers = [
     "modules.measurements", "modules.services", "modules.media", "modules.blueprints",
     "modules.nameplate", "modules.operating_data", "modules.vibration",
     "modules.ultrasound", "modules.thermography", "modules.diagnostics", "modules.reports",
+    "modules.alignment", "modules.topography",
 ]

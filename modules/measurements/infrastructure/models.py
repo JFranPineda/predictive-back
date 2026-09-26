@@ -29,6 +29,10 @@ class Technique(TranslatableModel):
         default="mpd", db_index=True,
     )
     module_code = models.SlugField(max_length=60)
+    # What a visit of this technique needs before it may close, beyond the
+    # ordinary ownership check — read by `services`, owned by whichever
+    # optional module cares (V3-18's "plan_required"). Blank: nothing extra.
+    close_requirement = models.SlugField(max_length=30, blank=True)
 
 
 class Magnitude(TranslatableModel):

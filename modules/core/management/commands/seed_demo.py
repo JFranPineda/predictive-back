@@ -287,6 +287,10 @@ class Command(BaseCommand):
             )
             for code, name_es, name_en, module in TECHNIQUES
         }
+        # No reading plan seeds a topography visit's plan for it (V3-18): the
+        # close-time check is what makes it mandatory.
+        techniques["topography"].close_requirement = "plan_required"
+        techniques["topography"].save(update_fields=["close_requirement"])
         magnitudes = {
             code: Magnitude.objects.create(
                 code=code, technique=techniques[technique], name=name_es,
