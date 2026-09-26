@@ -12,8 +12,9 @@ from dataclasses import dataclass
 from django.db.models import Count
 
 from modules.assets.infrastructure.group_overview import GroupOverview, OverviewFilter, train_overview
+from modules.maintenance.infrastructure.interventions import last_work_records
 from modules.measurements.infrastructure.models import Reading
-from modules.services.domain.intervention import Intervention
+from modules.services.domain.intervention import Intervention, latest
 from modules.services.infrastructure.interventions import last_visits
 
 ORDERS = ("name", "last_intervention")
@@ -38,9 +39,14 @@ def train_index(
     trains = train_overview(company_id, area_ids, OverviewFilter(text=text), language)
     measured = _measured_points(company_id, technique)
     trains = [train for train in trains if measured.get(train.group.id)]
-    touched = last_visits(company_id, (train.group.id for train in trains), language)
+    group_ids = [train.group.id for train in trains]
+    visited = last_visits(company_id, group_ids, language)
+    worked = last_work_records(company_id, group_ids)
     rows = [
-        TrainIndexRow(train, measured[train.group.id], touched.get(train.group.id))
+        TrainIndexRow(
+            train, measured[train.group.id],
+            latest([visited.get(train.group.id), worked.get(train.group.id)]),
+        )
         for train in trains
     ]
     if order == "last_intervention":
