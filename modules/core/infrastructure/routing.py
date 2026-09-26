@@ -1,7 +1,8 @@
-"""Builds `/api/v1/` from the modules that are actually installed.
+"""Builds `/api/v1/` from every module on disk.
 
-A module that is not installed contributes no URL at all — a 404, not a 403,
-because an uninstalled module should be invisible.
+Which of them answer is decided per request by `ModuleGateMiddleware`, from
+the current tenant's installed modules — a URL table built once per process
+could not follow an install made from the UI, nor two customers' choices.
 """
 
 from __future__ import annotations
@@ -29,11 +30,8 @@ def installed_codes() -> frozenset[str]:
 
 
 def module_urlpatterns() -> list:
-    active = installed_codes()
     patterns = []
     for manifest in discover_manifests():
-        if manifest.code not in active and not manifest.is_core:
-            continue
         try:
             urls = importlib.import_module(f"modules.{manifest.code}.interfaces.urls")
         except ModuleNotFoundError:

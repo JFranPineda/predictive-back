@@ -54,6 +54,8 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "modules.licensing.infrastructure.middleware.LicenseMiddleware",
     "modules.core.infrastructure.middleware.RequestContextMiddleware",
+    # Last: it needs the tenant resolved, and runs once the URL is known.
+    "modules.core.infrastructure.module_gate.ModuleGateMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
