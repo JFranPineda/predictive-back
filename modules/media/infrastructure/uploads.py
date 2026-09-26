@@ -12,7 +12,7 @@ import io
 
 from modules.media.domain.derivatives import Variant, storage_key
 from modules.media.domain.formats import ACCEPTED, MAX_BYTES, extension_of
-from modules.media.infrastructure.local_store import checksum, store
+from modules.media.infrastructure.local_store import checksum, key_owner, store
 from modules.media.infrastructure.models import MediaAsset
 
 THUMB_EDGE = 320
@@ -42,7 +42,7 @@ def store_upload(*, company_id: int, upload, kind: str, owner_type: str, owner_i
 
     stored = assets.first()
     backend = store()
-    key = stored.original_key if stored else storage_key(company_id, digest, None, extension)
+    key = stored.original_key if stored else storage_key(key_owner(company_id), digest, None, extension)
     if stored is None:
         backend.put(key, payload, content_type=upload.content_type or "")
 
@@ -121,7 +121,7 @@ def _make_thumbnail(asset: MediaAsset, payload: bytes, backend) -> None:
         image.thumbnail((THUMB_EDGE, THUMB_EDGE))
         buffer = io.BytesIO()
         image.convert("RGB").save(buffer, format="JPEG", quality=72)
-        key = storage_key(asset.company_id, asset.checksum_sha256, Variant.THUMB, "jpg")
+        key = storage_key(key_owner(asset.company_id), asset.checksum_sha256, Variant.THUMB, "jpg")
         backend.put(key, buffer.getvalue(), content_type="image/jpeg")
         asset.derivatives = {"thumb": {"key": key, "w": image.width, "h": image.height}}
         # Still pending: the gallery has its preview, but card and full are the

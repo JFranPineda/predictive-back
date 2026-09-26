@@ -351,7 +351,7 @@ class Command(BaseCommand):
         if per_visit <= 0:
             return 0
         from modules.media.domain.derivatives import Variant, storage_key
-        from modules.media.infrastructure.local_store import checksum, store
+        from modules.media.infrastructure.local_store import checksum, key_owner, store
 
         backend = store()
         kind_of = {
@@ -382,7 +382,7 @@ class Command(BaseCommand):
                 digest = checksum(payload)
                 if MediaAsset.objects.filter(company=company, checksum_sha256=digest).exists():
                     continue
-                key = storage_key(company.id, digest, None, "jpg")
+                key = storage_key(key_owner(company.id), digest, None, "jpg")
                 backend.put(key, payload, content_type="image/jpeg")
                 asset = MediaAsset.objects.create(
                     company=company, kind=kind, owner_type="visit", owner_id=visit.id,
@@ -548,12 +548,14 @@ def _draw(visit, kind: str, slot: int) -> bytes:
 def _thumbnail(asset, payload: bytes, backend, storage_key, Variant) -> None:
     from PIL import Image
 
+    from modules.media.infrastructure.local_store import key_owner
+
     image = Image.open(io.BytesIO(payload))
     asset.width, asset.height = image.size
     image.thumbnail((320, 320))
     buffer = io.BytesIO()
     image.convert("RGB").save(buffer, format="JPEG", quality=72)
-    key = storage_key(asset.company_id, asset.checksum_sha256, Variant.THUMB, "jpg")
+    key = storage_key(key_owner(asset.company_id), asset.checksum_sha256, Variant.THUMB, "jpg")
     backend.put(key, buffer.getvalue(), content_type="image/jpeg")
     asset.derivatives = {"thumb": {"key": key, "w": image.width, "h": image.height}}
     asset.save(update_fields=["derivatives", "width", "height", "updated_at"])

@@ -57,3 +57,11 @@ def store():
 
         return ObjectStore()
     return LocalObjectStore()
+
+
+def key_owner(company_id: int) -> str:
+    """The folder a company's files go in: the tenant first, then the company."""
+    from modules.licensing.infrastructure.context import current_tenant
+
+    tenant = current_tenant()
+    return f"{tenant}/{company_id}" if tenant else str(company_id)

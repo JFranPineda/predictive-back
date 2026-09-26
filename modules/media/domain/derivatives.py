@@ -54,8 +54,13 @@ def keeps_pristine_original(fmt: OriginalFormat) -> bool:
     return fmt in LOSSLESS_ORIGINALS
 
 
-def storage_key(company_id: int, checksum: str, variant: Variant | None, extension: str) -> str:
+def storage_key(owner: str | int, checksum: str, variant: Variant | None, extension: str) -> str:
     """Content-addressed: the same photo uploaded twice lands on one key, which
-    is what makes deduplication free."""
+    is what makes deduplication free.
+
+    `owner` is the tenant and company (`ipsa/1`). A company id alone is not
+    unique across tenants — each customer database numbers its own from 1 —
+    so two tenants shared a folder, and deleting a photo in one removed the
+    other's copy of the same bytes."""
     prefix = "originals" if variant is None else f"derivatives/{variant.value}"
-    return f"{prefix}/{company_id}/{checksum[:2]}/{checksum}.{extension}"
+    return f"{prefix}/{owner}/{checksum[:2]}/{checksum}.{extension}"

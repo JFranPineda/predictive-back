@@ -26,7 +26,7 @@ from modules.media.domain.derivatives import (
     storage_key,
 )
 from modules.media.domain.flir import extract as extract_flir
-from modules.media.infrastructure.local_store import store
+from modules.media.infrastructure.local_store import key_owner, store
 from modules.media.infrastructure.models import MediaAsset
 
 logger = logging.getLogger(__name__)
@@ -104,7 +104,7 @@ def _derivatives(image, asset: MediaAsset, backend) -> dict:
     made = {}
     for spec in specs_for(OriginalFormat(_known_format(asset.original_format))):
         resized = _resize(image, spec.max_edge)
-        key = storage_key(asset.company_id, asset.checksum_sha256, spec.variant, fmt)
+        key = storage_key(key_owner(asset.company_id), asset.checksum_sha256, spec.variant, fmt)
         backend.put(key, _encode(resized, fmt, spec.quality), content_type=f"image/{fmt}")
         made[spec.variant.value] = {"key": key, "w": resized.width, "h": resized.height}
     return made
@@ -127,7 +127,7 @@ def _radiometric(payload: bytes, asset: MediaAsset, backend) -> dict:
         meta["calibration"] = result.calibration.as_dict()
     if result.raw_thermal is not None:
         key = storage_key(
-            asset.company_id, asset.checksum_sha256, None,
+            key_owner(asset.company_id), asset.checksum_sha256, None,
             f"thermal.{result.raw_format}",
         )
         backend.put(key, result.raw_thermal, content_type="application/octet-stream")
