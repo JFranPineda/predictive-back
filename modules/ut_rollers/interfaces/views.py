@@ -190,6 +190,7 @@ class RollerSheetView(APIView):
                     company_id=request.company_id, service_visit_id=visit.id,
                     taken_at=visit.visited_at or datetime.now(UTC), inputs=inputs,
                     operator_id=request.user.id,
+                    standard_code=order.standard.code if order.standard_id else None,
                 )
             _save_observation(request, visit, observation)
             saved += 1

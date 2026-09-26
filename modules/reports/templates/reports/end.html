@@ -5,6 +5,7 @@
   <tr><th>Servicio</th><td>{{ header.technique }}</td><th>Orden</th><td>{{ header.order }}{% if header.client_order %} · OT {{ header.client_order }}{% endif %}</td></tr>
   <tr><th>Fecha</th><td>{{ header.dates }}</td><th>Empresa</th><td>{{ header.provider|default:"—" }}</td></tr>
   <tr><th>Analista</th><td colspan="3">{{ header.analyst|default:"—" }}</td></tr>
+  <tr><th>Norma</th><td colspan="3">{{ header.standard }}</td></tr>
 </table>
 
 <h2>Resumen</h2>

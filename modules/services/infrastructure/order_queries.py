@@ -22,7 +22,7 @@ class OrderTotals:
 def orders_matching(company_id: int, wanted: OrderFilter) -> QuerySet[ServiceOrder]:
     queryset = (
         ServiceOrder.objects.for_company(company_id)
-        .select_related("technique", "plant", "provider", "lead_analyst", "supervisor")
+        .select_related("technique", "plant", "provider", "lead_analyst", "supervisor", "standard")
         .annotate(visit_count=Count("visits", distinct=True))
         .order_by("-scheduled_from", "-id")
     )

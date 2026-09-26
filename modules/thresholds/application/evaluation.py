@@ -13,9 +13,13 @@ from modules.thresholds.domain.services import classify_context
 from modules.thresholds.infrastructure.repositories import standard_to_domain
 
 
-def context_for(equipment, magnitude_code: str, aggregation: str, point_id: int | None = None):
+def context_for(equipment, magnitude_code: str, aggregation: str, point_id: int | None = None,
+                standard=None):
+    """`standard` is the norma the report chose (`ServiceOrder.standard`); it
+    wins over the one the machine carries, so one client can have a report
+    judged by norma A and another by norma B."""
     plate = getattr(equipment, "nameplate", None)
-    standard = equipment.applied_standard
+    standard = standard or equipment.applied_standard
 
     context = EvaluationContext(
         magnitude_code=magnitude_code,

@@ -265,8 +265,10 @@ def _evaluate(company_id: int, reading: Reading):
     if reading.value is None:
         return None
     candidates = DjangoThresholdRepository().candidates(company_id, reading.magnitude.code)
+    order = reading.service_visit.service_order if reading.service_visit_id else None
     context = context_for(
-        reading.point.equipment, reading.magnitude.code, reading.aggregation, reading.point_id
+        reading.point.equipment, reading.magnitude.code, reading.aggregation, reading.point_id,
+        standard=order.standard if order else None,
     )
     verdict = evaluate(reading.value, resolve(candidates, context, reading.taken_at.date()))
     if verdict.status is None:

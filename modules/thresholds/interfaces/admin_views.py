@@ -21,11 +21,17 @@ from modules.security.application.access import build_actor
 from modules.thresholds.domain.entities import (
     Aggregation,
     Band,
-    MachineClass as MachineClassVO,
     Scope,
     Standard,
-    Status as StatusVO,
     StatusKind,
+)
+from modules.thresholds.domain.entities import (
+    MachineClass as MachineClassVO,
+)
+from modules.thresholds.domain.entities import (
+    Status as StatusVO,
+)
+from modules.thresholds.domain.entities import (
     ThresholdSet as ThresholdSetVO,
 )
 from modules.thresholds.domain.errors import (
@@ -33,6 +39,7 @@ from modules.thresholds.domain.errors import (
     StandardTechniqueMismatch,
 )
 from modules.thresholds.domain.services import validate_bands, validate_standard_for_magnitude
+from modules.thresholds.interfaces.standard_payload import standard_payload
 from modules.thresholds.models import (
     MachineClass,
     Status,
@@ -80,27 +87,6 @@ def _decimal(raw) -> Decimal | None:
         raise ValidationError(f"'{raw}' no es un número") from exc
 
 
-def _standard_payload(row: ThresholdStandard, language: str) -> dict:
-    return {
-        "id": row.id,
-        "code": row.code,
-        "name": row.translated("name", language),
-        "names": row.translations.get("name") or {},
-        "source": row.source,
-        "description": row.description,
-        "is_builtin": row.is_builtin,
-        "is_active": row.is_active,
-        "techniques": [
-            {"code": t.code, "name": t.translated("name", language)} for t in row.techniques.all()
-        ],
-        "machine_classes": [
-            {"id": mc.id, "code": mc.code, "name": mc.name, "description": mc.description}
-            for mc in row.machine_classes.all()
-        ],
-        "set_count": row.sets.count(),
-    }
-
-
 class StandardCollectionView(PermissionedView):
     required_permission = "thresholds.manage_standard"
 
@@ -127,7 +113,7 @@ class StandardCollectionView(PermissionedView):
         )
         _apply_techniques(standard, request.data.get("techniques"))
         _apply_machine_classes(standard, request.data.get("machine_classes"))
-        return Response(_standard_payload(standard, language), status=201)
+        return Response(standard_payload(standard, language), status=201)
 
 
 class StandardDetailView(PermissionedView):
@@ -155,7 +141,7 @@ class StandardDetailView(PermissionedView):
             _apply_techniques(standard, request.data.get("techniques"))
         if "machine_classes" in request.data:
             _apply_machine_classes(standard, request.data.get("machine_classes"))
-        return Response(_standard_payload(standard, language))
+        return Response(standard_payload(standard, language))
 
     def delete(self, request, standard_id: int):
         self.require(request)

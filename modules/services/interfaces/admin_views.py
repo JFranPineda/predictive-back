@@ -77,6 +77,7 @@ class ServiceOrderAdminView(ServiceAdminView):
             provider=_provider(request, request.data.get("provider")),
             lead_analyst_id=_analyst(request, request.data.get("lead_analyst")),
             supervisor_id=request.data.get("supervisor") or None,
+            standard=_standard(request, request.data.get("standard"), technique),
         )
         return Response({"id": order.id, "code": order.code}, status=201)
 
@@ -103,8 +104,19 @@ class ServiceOrderDetailView(ServiceAdminView):
             order.lead_analyst_id = _analyst(request, request.data["lead_analyst"])
         if "status" in request.data and request.data["status"] != order.status:
             self._change_status(request, order, request.data["status"])
+        regraded = None
+        if "standard" in request.data:
+            standard = _standard(request, request.data["standard"], order.technique)
+            if standard != order.standard:
+                before = order.standard.name if order.standard else None
+                order.standard = standard
+                order.save()
+                regraded = _regrade(order)
+                record(request, "service_order.standard", object_type="service_order", object_id=order.id,
+                       before={"standard": before},
+                       after={"standard": standard.name if standard else None, "regraded": regraded})
         order.save()
-        return Response({"id": order.id, "code": order.code, "status": order.status})
+        return Response({"id": order.id, "code": order.code, "status": order.status, "regraded": regraded})
 
     def delete(self, request, order_id: int):
         self.require(request, "services.manage_order")
@@ -136,6 +148,39 @@ def _provider(request, provider_id) -> ServiceProvider | None:
     if provider is None:
         raise ValidationError("Esa empresa no existe")
     return provider
+
+
+def _standard(request, standard_id, technique):
+    """A norma the company has, and one written for this order's service."""
+    if not standard_id:
+        return None
+    from modules.thresholds.models import ThresholdStandard
+
+    standard = (
+        ThresholdStandard.objects.for_company(request.company_id)
+        .filter(id=standard_id, is_active=True)
+        .prefetch_related("techniques")
+        .first()
+    )
+    if standard is None:
+        raise ValidationError("Esa norma no existe")
+    judged = {row.code for row in standard.techniques.all()}
+    if judged and technique.code not in judged:
+        raise ValidationError(f"La norma «{standard.name}» no se aplica a {technique.name}")
+    return standard
+
+
+def _regrade(order: ServiceOrder) -> int:
+    """The report now cites another norma: its readings say what they are
+    under that one."""
+    from modules.measurements.models import Reading
+    from modules.thresholds.infrastructure.regrade import regrade
+
+    readings = Reading.objects.filter(service_visit__service_order=order).select_related(
+        "magnitude", "point__equipment__asset_group__kind", "point__equipment__applied_standard",
+        "point__equipment__machine_class", "point__equipment__nameplate",
+    )
+    return regrade(readings, standard=order.standard)
 
 
 def _analyst(request, user_id) -> int | None:

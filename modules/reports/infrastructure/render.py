@@ -73,7 +73,7 @@ def _mpd(context: dict) -> bytes:
         ["Estado", header["state"]["name"] if header["state"] else "Sin evaluar"],
         ["Servicio", header["technique"]], ["Orden", header["order"]], ["OT cliente", header["client_order"]],
         ["Fecha", header["dates"]], ["Inspección", header["people"]], ["Analista", header["analyst"]],
-        ["Equipo utilizado", header["instruments"]],
+        ["Equipo utilizado", header["instruments"]], ["Norma", header["standard"]],
     ], first=True)
     _sheet(book, "I-III", ["Sección", "Fecha", "Tipo", "Texto", "Autor", "Estado"], [
         *[["I. Antecedentes", r["date"], r["type"], r["text"], r["author"], ""]

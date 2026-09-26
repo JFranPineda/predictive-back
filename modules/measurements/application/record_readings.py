@@ -53,7 +53,10 @@ class RecordReadings:
         inputs: tuple[ReadingInput, ...],
         operator_id: int,
         idempotency_key: str | None = None,
+        standard_code: str | None = None,
     ) -> tuple[RecordedReading, ...]:
+        """`standard_code` is the norma the visit's report cites; when given
+        it judges the round instead of each machine's own standard."""
         if idempotency_key and self._readings.batch_exists(idempotency_key):
             return self._readings.batch_results(idempotency_key)
 
@@ -61,7 +64,7 @@ class RecordReadings:
         recorded: list[RecordedReading] = []
 
         for item in inputs:
-            evaluation = self._evaluate(company_id, item, contexts[item.point_id], taken_at)
+            evaluation = self._evaluate(company_id, item, contexts[item.point_id], taken_at, standard_code)
             reading_id = self._readings.add(
                 company_id=company_id,
                 service_visit_id=service_visit_id,
@@ -97,7 +100,10 @@ class RecordReadings:
             self._readings.record_batch(idempotency_key, service_visit_id, len(recorded))
         return tuple(recorded)
 
-    def _evaluate(self, company_id: int, item: ReadingInput, point_context, taken_at: datetime):
+    def _evaluate(
+        self, company_id: int, item: ReadingInput, point_context, taken_at: datetime,
+        standard_code: str | None = None,
+    ):
         if item.value is None:
             from modules.thresholds.domain.entities import Evaluation
 
@@ -114,7 +120,7 @@ class RecordReadings:
             # Without the standard every set is out of play and the reading
             # comes back ungraded; without the plate the class cannot be
             # derived for the machines nobody classified by hand.
-            standard_code=getattr(point_context, "standard_code", None),
+            standard_code=standard_code or getattr(point_context, "standard_code", None),
             rated_power_kw=getattr(point_context, "rated_power_kw", None),
             mounting=getattr(point_context, "mounting", None),
         )

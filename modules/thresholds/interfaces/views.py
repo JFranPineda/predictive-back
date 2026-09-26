@@ -4,6 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from modules.thresholds.interfaces.standard_payload import standard_payload
 from modules.thresholds.models import Status, ThresholdBand, ThresholdSet, ThresholdStandard
 
 
@@ -142,24 +143,7 @@ class StandardListView(APIView):
             .prefetch_related("machine_classes", "techniques")
             .order_by("name")
         )
-        return Response([
-            {
-                "id": row.id, "code": row.code, "name": row.translated("name", language),
-                "names": row.translations.get("name") or {},
-                "source": row.source, "description": row.description,
-                "is_builtin": row.is_builtin, "is_active": row.is_active,
-                "techniques": [
-                    {"code": t.code, "name": t.translated("name", language)}
-                    for t in row.techniques.all()
-                ],
-                "machine_classes": [
-                    {"id": mc.id, "code": mc.code, "name": mc.name, "description": mc.description}
-                    for mc in row.machine_classes.all()
-                ],
-                "set_count": row.sets.count(),
-            }
-            for row in queryset
-        ])
+        return Response([standard_payload(row, language) for row in queryset])
 
 
 class ThresholdSetListView(APIView):

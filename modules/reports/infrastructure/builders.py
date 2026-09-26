@@ -13,7 +13,7 @@ from datetime import date
 from django.utils import timezone
 from rest_framework.exceptions import NotFound, ValidationError
 
-from modules.reports.domain.pareto import LABELS, STATES, pareto, state_for
+from modules.reports.domain.pareto import LABELS, pareto, shown_states, state_for
 from modules.reports.domain.trend_svg import PALETTE, trend_svg
 from modules.reports.infrastructure.images import embedded, logo
 
@@ -192,7 +192,8 @@ def build_mpd(request, order_id: int, group_id: int) -> dict:
                 {"color": PALETTE[index % len(PALETTE)], "label": f"{row['component']} · {row['label']}"}
                 for index, row in enumerate(drawn)
             ],
-            "limits": _limits(request, equipments, block["magnitude_code"], block["aggregation"]),
+            "limits": _limits(request, equipments, block["magnitude_code"], block["aggregation"],
+                              order.standard),
         })
 
     photos = MediaAsset.objects.for_company(request.company_id)
@@ -235,6 +236,7 @@ def build_mpd(request, order_id: int, group_id: int) -> dict:
             "people": ", ".join(people),
             "analyst": order.lead_analyst.get_full_name() if order.lead_analyst else "",
             "instruments": ", ".join(sorted({v.instrument.name for v in visits if v.instrument})),
+            "standard": _standard_name(order, language),
             "state": None if state is None else {
                 "name": state.translated("name", language), "color": state.color,
             },
@@ -259,9 +261,17 @@ def _short(iso: str) -> str:
     return date.fromisoformat(iso).strftime("%d/%m/%y")
 
 
-def _limits(request, equipments, magnitude_code: str, aggregation: str) -> list[dict]:
+def _standard_name(order, language: str) -> str:
+    """The norma the report cites; without one, each machine's own."""
+    if order.standard_id:
+        return order.standard.translated("name", language)
+    return "Según la norma de cada equipo"
+
+
+def _limits(request, equipments, magnitude_code: str, aggregation: str, standard=None) -> list[dict]:
     """The criteria in force for this magnitude, resolved through the same
-    cascade that graded the readings, once per machine of the train."""
+    cascade that graded the readings — with the report's norma when the order
+    names one — once per machine of the train."""
     from modules.thresholds.application.evaluation import context_for
     from modules.thresholds.domain.services import resolve
     from modules.thresholds.infrastructure.repositories import DjangoThresholdRepository
@@ -275,7 +285,7 @@ def _limits(request, equipments, magnitude_code: str, aggregation: str) -> list[
     found: dict[int, dict] = {}
     for machine in equipments:
         try:
-            context = context_for(machine, magnitude_code, aggregation)
+            context = context_for(machine, magnitude_code, aggregation, standard=standard)
         except ValueError:
             continue
         chosen = resolve(candidates, context, date.today())
@@ -436,6 +446,7 @@ def build_end(request, order_id: int) -> dict:
             "provider": order.provider.name if order.provider else "",
             "analyst": order.lead_analyst.get_full_name() if order.lead_analyst else "",
             "dates": _span(order.scheduled_from, order.scheduled_to),
+            "standard": _standard_name(order, language),
         },
         "labels": labels or [f"P{i + 1}" for i in range(width)],
         "elements": elements,
@@ -553,6 +564,7 @@ def build_monthly(request, plant_id: int, month: str) -> dict:
             "conclusion": latest.get((group_id, "conclusion"), ""),
             "recommendation": latest.get((group_id, "recommendation"), ""),
         })
+    tallies = {code: pareto(per_technique[code]) for code in codes}
     return {
         "logo": logo(),
         "title": "Resumen mensual de condición",
@@ -561,8 +573,8 @@ def build_monthly(request, plant_id: int, month: str) -> dict:
         "rows": rows,
         "pareto": [
             {"technique": techniques[code],
-             "counts": [{"state": LABELS[state], "key": state, "count": pareto(per_technique[code])[state]}
-                        for state in STATES]}
+             "counts": [{"state": LABELS[state], "key": state, "count": tallies[code][state]}
+                        for state in shown_states(tallies.values())]}
             for code in codes
         ],
         "filename": f"resumen-{plant.code}-{month}",

@@ -56,6 +56,10 @@ def _order(order: ServiceOrder, language: str) -> dict:
             order.lead_analyst, order.lead_analyst.get_full_name() if order.lead_analyst else ""
         ),
         "supervisor": order.supervisor.get_full_name() if order.supervisor else None,
+        # The norma the report is judged by; null means each machine's own.
+        "standard": _named(
+            order.standard, order.standard.translated("name", language) if order.standard else ""
+        ),
         "visit_count": order.visit_count,
     }
 

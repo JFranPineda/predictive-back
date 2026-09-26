@@ -1,6 +1,6 @@
 """V3-23: the monthly Pareto and the PDF's trend chart."""
 
-from modules.reports.domain.pareto import pareto, state_for
+from modules.reports.domain.pareto import pareto, shown_states, state_for
 from modules.reports.domain.trend_svg import trend_svg
 
 
@@ -25,8 +25,18 @@ def test_the_pareto_counts_each_state_once_per_train():
     # IPSA, 21-sep: 17 normal, 1 alarm, 3 shutdown, 20 off.
     states = ["normal"] * 17 + ["alarm"] + ["shutdown"] * 3 + ["off"] * 20 + [None] * 4
     assert pareto(states) == {
-        "normal": 17, "alarm": 1, "shutdown": 3, "off": 20, "unevaluated": 0,
+        "normal": 17, "alarm": 1, "alert": 0, "shutdown": 3, "off": 20, "unevaluated": 0,
     }
+
+
+def test_alerta_is_a_column_only_where_a_norma_uses_it():
+    # IPSA's thermal scale (Q9) has ALERTA between ALARMA and PARADA; AMBEV's
+    # Pareto must not grow an empty column for it.
+    without = pareto(["normal", "alarm"])
+    with_alert = pareto(["alert", state_for("alert", visited=True, off=False)])
+    assert "alert" not in shown_states([without])
+    assert shown_states([without, with_alert]).index("alert") == 2
+    assert with_alert["alert"] == 2
 
 
 def test_the_trend_draws_one_line_per_point_and_steps_over_gaps():

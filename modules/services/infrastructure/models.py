@@ -68,6 +68,13 @@ class ServiceOrder(TenantModel):
     )
     lead_analyst = models.ForeignKey("security.User", on_delete=models.SET_NULL, null=True, related_name="+")
     supervisor = models.ForeignKey("security.User", on_delete=models.SET_NULL, null=True, related_name="+")
+    # The norma this report is judged by (Q9): the same client can have one
+    # thermography report under IPSA's scale and another under NETA. Empty
+    # means each machine's own standard.
+    standard = models.ForeignKey(
+        "thresholds.ThresholdStandard", on_delete=models.PROTECT, null=True, blank=True,
+        related_name="orders",
+    )
 
     class Meta:
         unique_together = [("company", "code")]

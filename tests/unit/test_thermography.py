@@ -1,13 +1,20 @@
-"""V3-16: a thermogram's Tmax and its ΔT."""
+"""V3-16 and Q8: a thermogram's Tmax and the ΔT the technician types."""
 
 from decimal import Decimal
 
-from modules.measurements.domain.thermography import delta_of
+from modules.measurements.domain.thermography import DELTA_TEMP, IR_TMAX, thermogram_values
 
 
-def test_delta_is_how_much_hotter_than_the_reference():
-    assert delta_of(Decimal("72"), Decimal("38")) == Decimal("34")
+def test_the_delta_is_kept_as_typed():
+    assert thermogram_values(Decimal("72"), Decimal("12.5")) == [
+        (IR_TMAX, Decimal("72")),
+        (DELTA_TEMP, Decimal("12.5")),
+    ]
 
 
-def test_a_reference_above_tmax_gives_a_negative_delta():
-    assert delta_of(Decimal("30"), Decimal("38")) == Decimal("-8")
+def test_no_delta_typed_means_no_delta_reading():
+    assert thermogram_values(Decimal("72"), None) == [(IR_TMAX, Decimal("72"))]
+
+
+def test_a_thermogram_without_tmax_still_records_its_delta():
+    assert thermogram_values(None, Decimal("4")) == [(IR_TMAX, None), (DELTA_TEMP, Decimal("4"))]

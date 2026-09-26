@@ -10,15 +10,19 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-STATES = ("normal", "alarm", "shutdown", "off", "unevaluated")
+# ALERTA sits between alarm and shutdown: IPSA's four-level thermal scale
+# (Q9). A plant whose normas never use it does not get an empty column.
+STATES = ("normal", "alarm", "alert", "shutdown", "off", "unevaluated")
+OPTIONAL_STATES = frozenset({"alert"})
 LABELS = {
     "normal": "NORMAL",
     "alarm": "ALARMA",
+    "alert": "ALERTA",
     "shutdown": "PARADA",
     "off": "APAGADO",
     "unevaluated": "SIN EVALUAR",
 }
-_BY_CONDITION = {"operational": "normal", "alarm": "alarm", "shutdown": "shutdown"}
+_BY_CONDITION = {"operational": "normal", "alarm": "alarm", "alert": "alert", "shutdown": "shutdown"}
 
 
 def state_for(worst_condition: str | None, *, visited: bool, off: bool) -> str | None:
@@ -36,3 +40,12 @@ def pareto(states: Iterable[str | None]) -> dict[str, int]:
         if state in counts:
             counts[state] += 1
     return counts
+
+
+def shown_states(tallies: Iterable[dict[str, int]]) -> tuple[str, ...]:
+    """The Pareto's columns: every state, but an optional one only if counted."""
+    counted = list(tallies)
+    return tuple(
+        state for state in STATES
+        if state not in OPTIONAL_STATES or any(tally.get(state) for tally in counted)
+    )

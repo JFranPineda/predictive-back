@@ -2,8 +2,10 @@
 
 The customer's sheet has no value table for termografía — it is one image per
 element observed. Uploading one creates or updates the point's `ir_tmax`
-reading (and its `delta_temp`, when a reference was given), linked back to the
-image so the record of values can show the thermogram behind the number.
+reading and, when the technician typed one, its `delta_temp` (Q8: a number in
+°C, entered as read), linked back to the image so the record of values can
+show the thermogram behind the number. Both are graded with the norma of the
+visit's report.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.assets.models import MeasurementPoint
-from modules.measurements.domain.thermography import DELTA_TEMP, IR_TMAX, delta_of
+from modules.measurements.domain.thermography import DELTA_TEMP, IR_TMAX, thermogram_values
 from modules.measurements.infrastructure.models import Magnitude, Reading, Unit
 from modules.media.domain.flir import extract, suggest_max_celsius
 from modules.media.infrastructure.uploads import UploadRejectedError, store_upload
@@ -70,20 +72,15 @@ class ThermogramView(APIView):
             suggested = suggest_max_celsius(radiometric)
             tmax = Decimal(str(suggested)) if suggested is not None else None
 
-        reference = _decimal(request.data.get("reference"))
-
-        ir_tmax = Magnitude.objects.get(code=IR_TMAX)
-        tmax_reading = _write_reading(
-            request.company_id, visit, point, ir_tmax, tmax, asset,
-        )
-
-        delta_reading = None
-        if reference is not None and tmax is not None:
-            delta_magnitude = Magnitude.objects.get(code=DELTA_TEMP)
-            delta_reading = _write_reading(
-                request.company_id, visit, point, delta_magnitude,
-                delta_of(tmax, reference), asset,
+        delta = _decimal(request.data.get("delta"))
+        written = {
+            code: _write_reading(
+                request.company_id, visit, point, Magnitude.objects.get(code=code), value, asset
             )
+            for code, value in thermogram_values(tmax, delta)
+        }
+        tmax_reading = written[IR_TMAX]
+        delta_reading = written.get(DELTA_TEMP)
 
         return Response({
             "image_id": asset.id,
@@ -108,12 +105,32 @@ def _write_reading(company_id: int, visit, point, magnitude, value, asset) -> Re
             "quality": "ok" if value is not None else "not_measured",
             "not_measured_reason": "" if value is not None else "no_access",
             "image": asset,
-            # No standard is loaded for a magnitude this new; the record marks
-            # it "sin norma" rather than pretending a verdict was reached.
-            "condition_status": None,
         },
     )
+    _grade(company_id, visit, reading)
     return reading
+
+
+def _grade(company_id: int, visit, reading: Reading) -> None:
+    """With the norma the visit's report cites (Q9): IPSA's four-level scale
+    in one report, NETA in another. No norma that covers it: "sin norma"."""
+    from modules.thresholds.application.evaluation import context_for
+    from modules.thresholds.domain.services import evaluate, resolve
+    from modules.thresholds.infrastructure.models import Status
+    from modules.thresholds.infrastructure.repositories import DjangoThresholdRepository
+
+    status, set_id = None, None
+    if reading.value is not None:
+        candidates = DjangoThresholdRepository().candidates(company_id, reading.magnitude.code)
+        context = context_for(reading.point.equipment, reading.magnitude.code, reading.aggregation,
+                              reading.point_id, standard=visit.service_order.standard)
+        verdict = evaluate(reading.value, resolve(candidates, context, reading.taken_at.date()))
+        set_id = verdict.threshold_set_id
+        if verdict.status is not None:
+            status = Status.objects.filter(company_id=company_id, code=verdict.status.code).first()
+    reading.condition_status = status
+    reading.threshold_set_id = set_id
+    reading.save(update_fields=["condition_status", "threshold_set"])
 
 
 def _url(asset) -> str:

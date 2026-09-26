@@ -47,7 +47,7 @@ class VisitCaptureView(APIView):
     def post(self, request, visit_id: int):
         visit = (
             ServiceVisit.objects.for_company(request.company_id)
-            .select_related("equipment__asset_group__sector__area")
+            .select_related("equipment__asset_group__sector__area", "service_order__standard")
             .prefetch_related("participants")
             .filter(id=visit_id)
             .first()
@@ -79,6 +79,7 @@ class VisitCaptureView(APIView):
             inputs=inputs,
             operator_id=request.user.id,
             idempotency_key=request.headers.get("Idempotency-Key") or None,
+            standard_code=visit.service_order.standard.code if visit.service_order.standard_id else None,
         )
         from modules.core.infrastructure.audit import record
 

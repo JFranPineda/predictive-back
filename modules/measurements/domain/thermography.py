@@ -37,7 +37,14 @@ IR_TMAX_SPEC = MagnitudeSpec(
 )
 
 
-def delta_of(tmax: Decimal, reference: Decimal) -> Decimal:
-    """ΔT is signed the way the sheet reads it: how much hotter than the
-    reference the element is."""
-    return tmax - reference
+def thermogram_values(tmax: Decimal | None, delta: Decimal | None) -> list[tuple[str, Decimal | None]]:
+    """What one thermogram records: its Tmax, and the ΔT the technician read.
+
+    ΔT is typed as it is, in °C (Q8): the client reads it off the camera's own
+    analysis. It was computed here from a reference temperature, which asked
+    the technician for a number the client does not use.
+    """
+    values: list[tuple[str, Decimal | None]] = [(IR_TMAX, tmax)]
+    if delta is not None:
+        values.append((DELTA_TEMP, delta))
+    return values

@@ -10,6 +10,7 @@
   <tr><th>Fecha</th><td>{{ header.dates }}</td><th>Empresa</th><td>{{ header.provider|default:"—" }}</td></tr>
   <tr><th>Inspección</th><td>{{ header.people|default:"—" }}</td><th>Analista</th><td>{{ header.analyst|default:"—" }}</td></tr>
   <tr><th>Equipo utilizado</th><td colspan="3">{{ header.instruments|default:"—" }}</td></tr>
+  <tr><th>Norma</th><td colspan="3">{{ header.standard }}</td></tr>
 </table>
 
 {% if schematic or site_photo %}

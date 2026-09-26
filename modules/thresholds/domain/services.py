@@ -60,7 +60,18 @@ def resolve(
     ]
     if not matching:
         return None
-    return max(matching, key=lambda c: (c.scope.value, c.valid_from, c.version))
+    # Within one scope, the norma the reading is judged by beats a
+    # hand-written criterion: a report that cites norma A must be graded by
+    # norma A, not by whichever global set happens to be newer.
+    return max(
+        matching,
+        key=lambda c: (
+            c.scope.value,
+            c.standard_code is not None and c.standard_code == context.standard_code,
+            c.valid_from,
+            c.version,
+        ),
+    )
 
 
 def evaluate(value: Decimal, threshold_set: ThresholdSet | None) -> Evaluation:
