@@ -11,6 +11,7 @@ from datetime import date
 
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.reports.infrastructure.builders import build_corrective, build_end, build_monthly, build_mpd
@@ -81,3 +82,45 @@ class CorrectiveReportView(_ReportView):
         if end < start:
             raise ValidationError("El fin del periodo es anterior al inicio")
         return respond("corrective", build_corrective(request, start, end), fmt)
+
+
+class ReportOrdersView(_ReportView):
+    """`GET reports/orders/?family=mpd|ndt` — what the pickers offer: the
+    orders of one family, newest first, and the trains each one visited."""
+
+    def get(self, request):
+        self.format_of(request)
+        from django.db.models import Count
+
+        from modules.services.models import ServiceOrder, ServiceVisit
+
+        family = request.query_params.get("family", "mpd")
+        orders = list(
+            ServiceOrder.objects.for_company(request.company_id)
+            .filter(technique__family=family)
+            .annotate(visits_count=Count("visits"))
+            .filter(visits_count__gt=0)
+            .select_related("technique")
+            .order_by("-scheduled_from", "-id")[:300]
+        )
+        trains: dict[int, list] = {}
+        for order_id, group_id, name in (
+            ServiceVisit.objects.for_company(request.company_id)
+            .filter(service_order__in=orders)
+            .values_list("service_order_id", "equipment__asset_group_id", "equipment__asset_group__name")
+            .distinct()
+            .order_by("equipment__asset_group__name")
+        ):
+            trains.setdefault(order_id, []).append({"id": group_id, "name": name})
+        language = getattr(request, "language", "es")
+        return Response([
+            {
+                "id": order.id,
+                "code": order.code,
+                "client_work_order": order.client_work_order,
+                "technique": order.technique.translated("name", language),
+                "date": order.scheduled_from.isoformat(),
+                "trains": trains.get(order.id, []),
+            }
+            for order in orders
+        ])
