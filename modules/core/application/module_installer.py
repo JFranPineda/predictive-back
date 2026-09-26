@@ -17,6 +17,7 @@ from modules.core.domain.manifest import Manifest, ModuleInfo
 from modules.core.domain.ports import (
     EventPublisher,
     FixtureLoader,
+    LifecycleHooks,
     ManifestSource,
     ModuleStateRepository,
     PermissionSynchronizer,
@@ -37,12 +38,14 @@ class ModuleInstaller:
         permissions: PermissionSynchronizer,
         fixtures: FixtureLoader,
         events: EventPublisher,
+        hooks: LifecycleHooks | None = None,
     ) -> None:
         self._manifests = manifests
         self._states = states
         self._permissions = permissions
         self._fixtures = fixtures
         self._events = events
+        self._hooks = hooks
 
     def catalog(self) -> tuple[ModuleInfo, ...]:
         states = self._states.all_states()
@@ -74,6 +77,9 @@ class ModuleInstaller:
     def uninstall(self, code: str) -> None:
         graph = self._graph()
         graph.assert_removable(code, self._states.installed_codes())
+        manifest = graph.get(code)
+        if manifest.on_uninstall and self._hooks is not None:
+            self._hooks.run(manifest.on_uninstall)
         self._permissions.revoke(code)
         self._states.set_state(code, "uninstalled", None)
         self._events.publish(ModuleUninstalled(occurred_at=datetime.now(UTC), module_code=code))
@@ -96,6 +102,10 @@ class ModuleInstaller:
     def _activate(self, manifest: Manifest) -> None:
         self._permissions.sync(manifest)
         self._fixtures.load(manifest)
+        # A module's own catalogue rows (its technique, statuses, limits) are
+        # created when it is installed, not by a seed that must know about it.
+        if manifest.on_install and self._hooks is not None:
+            self._hooks.run(manifest.on_install)
         self._states.set_state(manifest.code, "installed", manifest.version)
         self._events.publish(
             ModuleInstalled(

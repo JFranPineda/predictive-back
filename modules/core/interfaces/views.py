@@ -14,6 +14,7 @@ from modules.core.infrastructure.bus import bus
 from modules.core.infrastructure.discovery import DjangoManifestSource
 from modules.core.infrastructure.permissions_sync import (
     DjangoPermissionSynchronizer,
+    ImportlibLifecycleHooks,
     YamlFixtureLoader,
 )
 from modules.core.infrastructure.repositories import DjangoModuleStateRepository
@@ -27,6 +28,7 @@ def build_installer() -> ModuleInstaller:
         permissions=DjangoPermissionSynchronizer(),
         fixtures=YamlFixtureLoader(),
         events=bus,
+        hooks=ImportlibLifecycleHooks(),
     )
 
 

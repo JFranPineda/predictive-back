@@ -40,3 +40,8 @@ class FixtureLoader(Protocol):
 @runtime_checkable
 class ModuleCatalog(Protocol):
     def list(self) -> tuple[ModuleInfo, ...]: ...
+
+
+@runtime_checkable
+class LifecycleHooks(Protocol):
+    def run(self, dotted_path: str) -> None: ...

@@ -13,9 +13,12 @@ class DjangoPermissionSynchronizer:
 
         created = []
         for code, description in module.permissions:
+            # Reinstalling a module must bring back what uninstalling revoked:
+            # without `is_active` here, a module installed again from the UI
+            # stayed unusable, every check on its permissions still failing.
             permission, is_new = Permission.objects.update_or_create(
                 code=code,
-                defaults={"module_code": module.code, "description": description},
+                defaults={"module_code": module.code, "description": description, "is_active": True},
             )
             if is_new:
                 created.append(permission)
@@ -35,6 +38,19 @@ class DjangoPermissionSynchronizer:
         from modules.security.infrastructure.models import Permission
 
         Permission.objects.filter(module_code=module_code).update(is_active=False)
+
+
+class ImportlibLifecycleHooks:
+    """Runs a manifest's `on_install` / `on_uninstall` — a dotted path to a
+    callable taking no arguments, run on the tenant database the request (or
+    the command) is already bound to. The callable must be idempotent: an
+    upgrade runs `on_install` again."""
+
+    def run(self, dotted_path: str) -> None:
+        import importlib
+
+        module_path, _, attribute = dotted_path.rpartition(".")
+        getattr(importlib.import_module(module_path), attribute)()
 
 
 class YamlFixtureLoader:
