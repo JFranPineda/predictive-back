@@ -36,6 +36,7 @@ from modules.assets.models import (
     Sector,
 )
 from modules.core.infrastructure.transactions import tenant_atomic
+from modules.licensing.infrastructure.context import current_alias
 from modules.core.models import Company, InstalledModule
 from modules.diagnostics.domain.catalogue import ALL_FAULTS
 from modules.diagnostics.models import EquipmentLogEntry, FaultMode
@@ -481,9 +482,11 @@ class Command(BaseCommand):
                 company=company, code=blueprint.code, name=blueprint.name, is_builtin=True,
                 translations={"name": {"es": blueprint.name, "en": blueprint.name_en}},
             )
+            # The layout helper defaults to `default`, the control plane.
             write_layout(
                 kind, blueprint.components,
                 component_model=AssetGroupComponent, template_model=PointTemplate,
+                using=current_alias(),
             )
             created[blueprint.code] = kind
         return created
