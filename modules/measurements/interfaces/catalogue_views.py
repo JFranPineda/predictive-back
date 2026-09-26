@@ -18,7 +18,7 @@ from modules.measurements.domain.magnitude_order import display_order_for
 from modules.measurements.models import Magnitude, Technique, Unit
 from modules.security.application.access import build_actor
 
-AGGREGATIONS = ("rms", "peak", "peak_to_peak", "avg", "max")
+AGGREGATIONS = ("rms", "peak", "peak_to_peak", "avg", "max", "min")
 
 
 class TechniqueListView(APIView):

@@ -36,6 +36,8 @@ class Aggregation(StrEnum):
     PEAK_TO_PEAK = "peak_to_peak"
     AVG = "avg"
     MAX = "max"
+    # A wall thickness is judged on its thinnest point: lower is worse.
+    MIN = "min"
 
 
 class StatusKind(StrEnum):
