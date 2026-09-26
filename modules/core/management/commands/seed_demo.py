@@ -90,7 +90,8 @@ TECHNIQUES = [
     ("insulating_oil", "Aceite dieléctrico", "Insulating oil", "oil_analysis"),
     ("maintenance", "Mantenimiento", "Maintenance", "operating_data"),
     ("lubrication", "Lubricación", "Lubrication", "operating_data"),
-    ("alignment", "Alineamiento", "Alignment", "operating_data"),
+    ("alignment", "Alineamiento", "Alignment", "alignment"),
+    ("topography", "Topografía", "Topography", "topography"),
 ]
 
 MAGNITUDES = [

@@ -19,6 +19,15 @@ class MediaAsset(TenantModel):
         # real photograph of it (V3-14). Owned by the train, not a visit.
         ("schematic", "Esquema del conjunto"),
         ("site_photo", "Foto del equipo"),
+        # The four fixed roles of an alignment record (V3-17): the tool's own
+        # screen before and after, the train as a whole, and up to two of the
+        # finding that made the job necessary.
+        ("alignment_before", "Alineamiento · antes"),
+        ("alignment_after", "Alineamiento · después"),
+        ("alignment_group", "Alineamiento · conjunto"),
+        ("alignment_observation", "Alineamiento · observación"),
+        # The plan a topography record reads its element numbers from (V3-18).
+        ("topography_plan", "Plano de topografía"),
     ]
     STATES = [
         ("pending", "Pendiente"), ("uploading", "Subiendo"), ("processing", "Procesando"),
