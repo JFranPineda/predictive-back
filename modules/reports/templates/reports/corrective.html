@@ -1,0 +1,12 @@
+{% extends "reports/base.html" %}
+{% block content %}
+<table class="meta"><tr><th>Periodo</th><td>{{ header.period }}</td></tr></table>
+{% if rows %}
+<table>
+  <tr><th>Conjunto</th><th>Equipo</th><th>Trabajo</th><th>Inicio</th><th>Fin</th><th class="num">Duración</th><th>Responsables</th></tr>
+  {% for row in rows %}
+  <tr><td>{{ row.group }}</td><td>{{ row.equipment|default:"—" }}</td><td>{{ row.work }}</td><td>{{ row.start }}</td><td>{{ row.end }}</td><td class="num">{{ row.duration }}</td><td>{{ row.responsibles }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}<p class="empty">No hay registros cerrados en el periodo.</p>{% endif %}
+{% endblock %}

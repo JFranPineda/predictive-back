@@ -1,0 +1,21 @@
+{% extends "reports/base.html" %}
+{% block content %}
+<table class="meta"><tr><th>Planta</th><td>{{ header.plant }}</td><th>Mes</th><td>{{ header.month }}</td></tr></table>
+
+<h2>Estado por conjunto</h2>
+{% if rows %}
+<table>
+  <tr><th>Conjunto</th>{% for name in techniques %}<th>{{ name }}</th>{% endfor %}<th>Conclusión</th><th>Recomendación</th></tr>
+  {% for row in rows %}
+  <tr><td>{{ row.group }}</td>{% for cell in row.cells %}<td>{{ cell.state }}</td>{% endfor %}<td>{{ row.conclusion }}</td><td>{{ row.recommendation }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}<p class="empty">Ningún servicio visitó esta planta en el mes.</p>{% endif %}
+
+<h2>Pareto por servicio</h2>
+{% for technique in pareto %}
+<h3>{{ technique.technique }}</h3>
+<table style="width: 60%"><tr>{% for count in technique.counts %}<th class="num">{{ count.state }}</th>{% endfor %}</tr>
+<tr>{% for count in technique.counts %}<td class="num">{{ count.count }}</td>{% endfor %}</tr></table>
+{% endfor %}
+{% endblock %}

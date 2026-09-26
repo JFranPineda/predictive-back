@@ -1,0 +1,88 @@
+{% extends "reports/base.html" %}
+{% block content %}
+<table class="meta">
+  <tr><th>Cliente</th><td>{{ header.client }}</td><th>Locación</th><td>{{ header.plant }}</td></tr>
+  <tr><th>Área</th><td>{{ header.area }}</td><th>Sector</th><td>{{ header.sector }}</td></tr>
+  <tr><th>Conjunto</th><td>{{ header.group }}</td><th>Estado</th>
+      <td>{% if header.state %}<span class="pill" style="background: {{ header.state.color }}">{{ header.state.name }}</span>{% else %}<span class="muted">Sin evaluar</span>{% endif %}</td></tr>
+  <tr><th>Equipos</th><td colspan="3">{{ header.equipments }}</td></tr>
+  <tr><th>Servicio</th><td>{{ header.technique }}</td><th>Orden</th><td>{{ header.order }}{% if header.client_order %} · OT {{ header.client_order }}{% endif %}</td></tr>
+  <tr><th>Fecha</th><td>{{ header.dates }}</td><th>Empresa</th><td>{{ header.provider|default:"—" }}</td></tr>
+  <tr><th>Inspección</th><td>{{ header.people|default:"—" }}</td><th>Analista</th><td>{{ header.analyst|default:"—" }}</td></tr>
+  <tr><th>Equipo utilizado</th><td colspan="3">{{ header.instruments|default:"—" }}</td></tr>
+</table>
+
+{% if schematic or site_photo %}
+<div class="grid">
+  {% if schematic %}<figure><img src="{{ schematic }}" alt=""><figcaption>Esquema del conjunto</figcaption></figure>{% endif %}
+  {% if site_photo %}<figure><img src="{{ site_photo }}" alt=""><figcaption>Foto del equipo</figcaption></figure>{% endif %}
+</div>
+{% endif %}
+
+<h2>I. Antecedentes</h2>
+{% if background %}<ul class="lines">{% for row in background %}<li><strong>{{ row.date }}</strong> · {{ row.text }} <span class="muted">— {{ row.author }}</span></li>{% endfor %}</ul>
+{% else %}<p class="empty">Sin antecedentes registrados.</p>{% endif %}
+
+<h2>II. Estado actual</h2>
+{% if present or faults %}
+<ul class="lines">
+  {% for row in present %}<li><strong>{{ row.type }}</strong> · {{ row.text }} <span class="muted">— {{ row.author }}, {{ row.date }}</span></li>{% endfor %}
+  {% if faults %}<li><strong>Problemas identificados</strong> · {{ faults|join:", " }}</li>{% endif %}
+</ul>
+{% else %}<p class="empty">Sin hallazgos registrados en esta orden.</p>{% endif %}
+
+<h2>III. Recomendaciones</h2>
+{% if recommendations %}
+<table><tr><th style="width: 16%">Fecha</th><th>Recomendación</th><th style="width: 14%">Estado</th></tr>
+{% for row in recommendations %}<tr><td>{{ row.date }}</td><td>{{ row.text }}</td><td>{{ row.status|default:"—" }}</td></tr>{% endfor %}</table>
+{% else %}<p class="empty">Sin recomendaciones.</p>{% endif %}
+
+<h2>IV. Registro de valores</h2>
+{% for block in blocks %}
+<div class="block">
+  <h3>{{ block.title }} ({{ block.unit }} — {{ block.aggregation|upper }})</h3>
+  <table>
+    <tr><th>Componente</th><th>Punto</th>{% for day in dates %}<th class="num">{{ day }}</th>{% endfor %}</tr>
+    {% for row in block.rows %}
+    <tr><td>{{ row.component }}</td><td>{{ row.label }}</td>
+      {% for cell in row.cells %}<td class="num"{% if cell.color %} style="background: {{ cell.color }}26"{% endif %}>{{ cell.value|default:"" }}</td>{% endfor %}</tr>
+    {% endfor %}
+  </table>
+</div>
+{% empty %}<p class="empty">Sin lecturas.</p>{% endfor %}
+
+<h2>V. Límites</h2>
+{% for block in blocks %}
+  {% for criterion in block.limits %}
+  <div class="block">
+    <h3>{{ block.title }} · {{ criterion.standard }} <span class="muted">({{ criterion.machines|join:", " }})</span></h3>
+    <table><tr><th>Estado</th><th class="num">Desde</th><th class="num">Hasta</th></tr>
+    {% for band in criterion.bands %}<tr><td><span class="dot" style="background: {{ band.color }}"></span>{{ band.status }}</td><td class="num">{{ band.min }}</td><td class="num">{{ band.max }}</td></tr>{% endfor %}</table>
+  </div>
+  {% endfor %}
+{% endfor %}
+
+<h2>VI. Tendencias</h2>
+{% for block in blocks %}{% if block.trend %}
+<div class="block"><h3>{{ block.title }}</h3>{{ block.trend|safe }}
+  <p class="legend">{% for item in block.legend %}<span><span class="dot" style="background: {{ item.color }}"></span>{{ item.label }}</span>{% endfor %}</p></div>
+{% endif %}{% endfor %}
+
+{% if alignment %}
+<h2>Alineamiento</h2>
+{% for record in alignment %}
+<div class="block">
+  <p>{{ record.coupling }} · {{ record.rpm }} rpm · tolerancia {{ record.tolerance }}</p>
+  <table>
+    <tr><th></th><th class="num">Angular H</th><th class="num">Paralelo H</th><th class="num">Angular V</th><th class="num">Paralelo V</th></tr>
+    <tr><th>Antes</th>{% for cell in record.before %}<td class="num">{{ cell.value }} {% if cell.ok is True %}<span class="ok">✓</span>{% elif cell.ok is False %}<span class="bad">✗</span>{% endif %}</td>{% endfor %}</tr>
+    <tr><th>Después</th>{% for cell in record.after %}<td class="num">{{ cell.value }} {% if cell.ok is True %}<span class="ok">✓</span>{% elif cell.ok is False %}<span class="bad">✗</span>{% endif %}</td>{% endfor %}</tr>
+  </table>
+</div>
+{% endfor %}
+{% endif %}
+
+{% if spectra %}<h2>Espectros</h2><div class="grid">{% for row in spectra %}<figure><img src="{{ row.src }}" alt=""><figcaption>{{ row.caption }}</figcaption></figure>{% endfor %}</div>{% endif %}
+{% if thermograms %}<h2>Termogramas</h2><div class="grid">{% for row in thermograms %}<figure><img src="{{ row.src }}" alt=""><figcaption>{{ row.caption }}</figcaption></figure>{% endfor %}</div>{% endif %}
+{% if evidence %}<h2>Registro fotográfico</h2><div class="grid">{% for row in evidence %}<figure><img src="{{ row.src }}" alt=""><figcaption>{{ row.caption }}</figcaption></figure>{% endfor %}</div>{% endif %}
+{% endblock %}

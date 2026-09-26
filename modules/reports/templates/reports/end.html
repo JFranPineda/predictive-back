@@ -1,0 +1,43 @@
+{% extends "reports/base.html" %}
+{% block content %}
+<table class="meta">
+  <tr><th>Cliente</th><td>{{ header.client }}</td><th>Locación</th><td>{{ header.plant }}</td></tr>
+  <tr><th>Servicio</th><td>{{ header.technique }}</td><th>Orden</th><td>{{ header.order }}{% if header.client_order %} · OT {{ header.client_order }}{% endif %}</td></tr>
+  <tr><th>Fecha</th><td>{{ header.dates }}</td><th>Empresa</th><td>{{ header.provider|default:"—" }}</td></tr>
+  <tr><th>Analista</th><td colspan="3">{{ header.analyst|default:"—" }}</td></tr>
+</table>
+
+<h2>Resumen</h2>
+<table style="width: 50%">
+  <tr><th>Estado</th><th class="num">Cantidad</th></tr>
+  {% for row in summary %}<tr><td>{{ row.state }}</td><td class="num">{{ row.count }}</td></tr>{% endfor %}
+  <tr><th>Total</th><th class="num">{{ total }}</th></tr>
+</table>
+
+<h2>Elementos inspeccionados</h2>
+{% if elements %}
+<table>
+  <tr><th>Grupo</th><th>Elemento</th>{% for label in labels %}<th class="num">{{ label }}</th>{% endfor %}<th class="num">Titular</th><th>Estado</th><th>Observación</th></tr>
+  {% for row in elements %}
+  <tr><td>{{ row.group }}</td><td>{{ row.name }}</td>
+    {% for value in row.values %}<td class="num">{{ value }}</td>{% endfor %}
+    <td class="num"><strong>{{ row.headline }}</strong></td>
+    <td style="white-space: nowrap">{% if row.color %}<span class="dot" style="background: {{ row.color }}"></span>{% endif %}{{ row.state|default:"—" }}</td>
+    <td>{{ row.observation }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}<p class="empty">La orden no tiene visitas.</p>{% endif %}
+
+{% if indications %}
+<h2>Incidencias</h2>
+<table><tr><th>Elemento</th><th>Tipo</th><th class="num">Longitud</th><th class="num">Profundidad</th><th>Posición</th></tr>
+{% for row in indications %}<tr><td>{{ row.element }}</td><td>{{ row.kind }}</td><td class="num">{{ row.length }}</td><td class="num">{{ row.depth }}</td><td>{{ row.position }}</td></tr>{% endfor %}</table>
+<div class="grid">{% for row in indications %}{% if row.photo %}<figure><img src="{{ row.photo }}" alt=""><figcaption>{{ row.element }} · {{ row.kind }}</figcaption></figure>{% endif %}{% endfor %}</div>
+{% endif %}
+
+<h2>Conclusiones</h2>
+{% if conclusions %}<ul class="lines">{% for row in conclusions %}<li><strong>{{ row.type }}</strong> · {{ row.text }} <span class="muted">— {{ row.author }}, {{ row.date }}</span></li>{% endfor %}</ul>
+{% else %}<p class="empty">Sin conclusiones registradas.</p>{% endif %}
+
+{% if photos %}<h2>Registro fotográfico</h2><div class="grid">{% for row in photos %}<figure><img src="{{ row.src }}" alt=""><figcaption>{{ row.caption }}</figcaption></figure>{% endfor %}</div>{% endif %}
+{% endblock %}

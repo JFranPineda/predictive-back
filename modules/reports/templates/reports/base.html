@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>{{ title }}</title>
+<style>
+  @page { size: A4; margin: 16mm 14mm 18mm 14mm;
+          @bottom-right { content: "Página " counter(page) " de " counter(pages); font-size: 8pt; color: #64748b; }
+          @bottom-left { content: "1A-MIG · Mantenimiento predictivo"; font-size: 8pt; color: #64748b; } }
+  body { font-family: Helvetica, Arial, sans-serif; font-size: 9pt; color: #0f172a; margin: 0; }
+  .sheet { max-width: 190mm; margin: 0 auto; }
+  header.brand { display: flex; align-items: center; justify-content: space-between;
+                 border-bottom: 2px solid #b91c1c; padding-bottom: 6px; margin-bottom: 10px; }
+  header.brand img { height: 32px; }
+  header.brand .client { text-align: right; font-size: 8.5pt; color: #334155; }
+  h1 { font-size: 14pt; margin: 4px 0 8px; }
+  h2 { font-size: 10.5pt; margin: 14px 0 6px; padding: 3px 6px; background: #1e293b; color: #fff; }
+  h3 { font-size: 9.5pt; margin: 10px 0 4px; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 6px; }
+  th, td { border: 1px solid #cbd5e1; padding: 3px 4px; vertical-align: top; }
+  th { background: #f1f5f9; text-align: left; font-weight: 600; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.meta th { width: 26%; }
+  .muted { color: #64748b; }
+  .pill { display: inline-block; padding: 1px 6px; border-radius: 8px; color: #fff; font-weight: 600; font-size: 8pt; }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 4px; margin-right: 3px; }
+  ul.lines { margin: 0; padding-left: 14px; } ul.lines li { margin-bottom: 3px; }
+  .grid { display: flex; flex-wrap: wrap; gap: 6px; }
+  figure { margin: 0; width: 88mm; page-break-inside: avoid; }
+  figure img { width: 100%; border: 1px solid #cbd5e1; }
+  figcaption { font-size: 8pt; color: #475569; margin-top: 2px; }
+  .ok { color: #15803d; font-weight: 700; } .bad { color: #b91c1c; font-weight: 700; }
+  .block { page-break-inside: avoid; }
+  .empty { color: #64748b; font-style: italic; }
+  p.legend { font-size: 8pt; color: #334155; margin: 2px 0 8px; } p.legend > span { margin-right: 10px; white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header class="brand">
+    <img src="{{ logo }}" alt="1A-MIG">
+    <div class="client"><strong>{{ header.client }}</strong>{% if header.plant %}<br>{{ header.plant }}{% endif %}</div>
+  </header>
+  <h1>{{ title }}</h1>
+  {% block content %}{% endblock %}
+</div>
+</body>
+</html>
