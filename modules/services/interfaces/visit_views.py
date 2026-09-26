@@ -95,6 +95,7 @@ class VisitDetailView(APIView):
                 "name": equipment.name,
                 "tag": equipment.client_tag or equipment.asset_code,
                 "type": equipment.equipment_type,
+                "lubrication_type": equipment.lubrication_type,
                 "asset_group": equipment.asset_group.name,
                 "asset_group_id": equipment.asset_group_id,
                 "area_label": f"{area.code} - {area.name}",

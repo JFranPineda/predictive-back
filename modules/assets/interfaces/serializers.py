@@ -47,7 +47,7 @@ class EquipmentSerializer(serializers.ModelSerializer):
         model = Equipment
         fields = [
             "id", "asset_code", "client_tag", "name", "equipment_type",
-            "monitoring_frequency", "area", "asset_group",
+            "monitoring_frequency", "lubrication_type", "area", "asset_group",
             "condition_status", "availability_status", "condition_updated_at",
         ]
 

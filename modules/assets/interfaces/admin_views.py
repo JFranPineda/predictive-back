@@ -16,6 +16,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.assets.domain.asset_code import generate as generate_code
+from modules.assets.domain.lubrication import default_lubrication_for
 from modules.assets.domain.point_layout import ComponentSpec, next_number, plan_layout
 from modules.assets.infrastructure.plan_counts import equipment_in_plan, plants_in_plan
 from modules.assets.models import (
@@ -290,6 +291,10 @@ class EquipmentCollectionView(AssetAdminView):
                 component.order if component else group.equipments.count()
             ),
             monitoring_frequency=request.data.get("monitoring_frequency") or "monthly",
+            lubrication_type=(
+                request.data.get("lubrication_type")
+                or default_lubrication_for(equipment_type)
+            ),
             applied_standard_id=request.data.get("applied_standard") or None,
             machine_class_id=request.data.get("machine_class") or None,
         )
@@ -311,7 +316,7 @@ class EquipmentDetailView(AssetAdminView):
         self.require(request)
         equipment = _get(self.scoped(Equipment, request), equipment_id, "equipo")
         for field in ("name", "client_tag", "equipment_type", "position_in_group",
-                      "monitoring_frequency"):
+                      "monitoring_frequency", "lubrication_type"):
             if field in request.data:
                 setattr(equipment, field, (request.data.get(field) or "").strip())
         if "applied_standard" in request.data:

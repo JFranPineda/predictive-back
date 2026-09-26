@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from django.db import models
 
+from modules.assets.domain.lubrication import LUBRICATION_TYPES
 from modules.core.infrastructure.models import TenantModel, TranslatableModel
 
 MONITORING_FREQUENCIES = [
@@ -189,6 +190,9 @@ class Equipment(TenantModel):
     monitoring_frequency = models.CharField(
         max_length=20, choices=MONITORING_FREQUENCIES, default="monthly"
     )
+    # Blank means "not chosen yet" — a soplador starts this way on purpose
+    # (V3-29): the customer said it goes either way, so nothing is guessed.
+    lubrication_type = models.CharField(max_length=10, choices=LUBRICATION_TYPES, blank=True)
     availability_status = models.ForeignKey(
         "thresholds.Status", on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
         limit_choices_to={"kind": "availability"},

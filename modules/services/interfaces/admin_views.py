@@ -179,7 +179,13 @@ class VisitCollectionView(ServiceAdminView):
 
         if request.data.get("create_readings", True):
             _seed_readings(visit, equipment, request.company_id)
-        return Response({"visit_id": visit.id, "equipment": equipment.name}, status=201)
+
+        warning = None
+        if order.technique.code == "oil_analysis" and equipment.lubrication_type == "grease":
+            warning = "Este equipo está registrado con grasa, no aceite"
+        return Response(
+            {"visit_id": visit.id, "equipment": equipment.name, "warning": warning}, status=201
+        )
 
 
 class VisitAdminView(ServiceAdminView):
