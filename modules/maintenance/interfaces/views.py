@@ -102,13 +102,9 @@ class WorkRecordMarkersView(APIView):
 
         rows = WorkRecord.objects.for_company(request.company_id).filter(
             asset_group_id=group_id, is_closed=True
-        )
-        names = dict(WorkRecord.WORK_TYPES)
+        ).order_by("shift_date", "id")
         return Response([
-            {
-                "date": row.shift_date.isoformat(),
-                "label": " / ".join(names.get(code, code) for code in row.work_types) or "Mantenimiento",
-            }
+            {"id": row.id, "date": row.shift_date.isoformat(), "work_types": row.work_types}
             for row in rows
         ])
 
