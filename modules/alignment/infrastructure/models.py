@@ -19,6 +19,12 @@ class AlignmentTolerance(TenantModel):
         related_name="alignment_tolerances",
         help_text="Vacío: tolerancia global por RPM. Con conjunto: la sobrescribe.",
     )
+    # The norma whose scale this tier is (Q10): the SKF chart is one norma, a
+    # client's own procedure another, and each record says which it used.
+    standard = models.ForeignKey(
+        "thresholds.ThresholdStandard", on_delete=models.CASCADE, null=True, blank=True,
+        related_name="alignment_tiers",
+    )
     rpm_ceiling = models.PositiveIntegerField(
         null=True, blank=True, help_text="RPM por debajo de la cual aplica; vacío = sin techo"
     )
@@ -70,6 +76,11 @@ class AlignmentRecord(TenantModel):
     # changed next year must not silently repaint last year's ✓/✗.
     tolerance_parallel_mm = models.DecimalField(max_digits=6, decimal_places=3)
     tolerance_angular_mm_per_100mm = models.DecimalField(max_digits=6, decimal_places=3)
+    # The norma the tolerance came from, chosen per report (Q10).
+    standard = models.ForeignKey(
+        "thresholds.ThresholdStandard", on_delete=models.PROTECT, null=True, blank=True,
+        related_name="alignment_records",
+    )
 
     # Linked, never duplicated: the maintenance intervention this measurement
     # belongs to lives in its own module (V3-32); this is only the reading.

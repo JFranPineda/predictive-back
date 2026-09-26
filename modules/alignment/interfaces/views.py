@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 
-from django.db.models import F, Q
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
@@ -19,13 +18,19 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.alignment.domain.tolerances import (
+    SKF_NORMA_CODE,
     AxisValues,
+    InvalidTiersError,
     Tolerance,
+    check_tiers,
     default_tolerance_for,
     evaluate,
+    tier_for,
 )
 from modules.alignment.infrastructure.models import AlignmentRecord, AlignmentTolerance
 from modules.assets.models import AssetGroup
+from modules.core.infrastructure import audit
+from modules.core.infrastructure.transactions import tenant_atomic
 from modules.media.infrastructure.uploads import UploadRejectedError, store_upload
 from modules.security.application.access import build_actor
 from modules.security.domain.policies import can_edit_visit
@@ -88,7 +93,8 @@ class AlignmentRecordListView(APIView):
         rpm = _decimal(request.data.get("rpm"))
         if rpm is None:
             raise ValidationError("El RPM es obligatorio: la tolerancia depende de él")
-        tolerance = _tolerance_for(request.company_id, group, rpm)
+        standard = _standard(request, request.data.get("standard"))
+        tolerance = _tolerance_for(request.company_id, group, rpm, standard)
 
         record = AlignmentRecord.objects.create(
             company_id=request.company_id, asset_group=group, service_visit=visit,
@@ -99,6 +105,7 @@ class AlignmentRecordListView(APIView):
             notes=(request.data.get("notes") or "").strip(),
             tolerance_parallel_mm=tolerance.parallel_mm,
             tolerance_angular_mm_per_100mm=tolerance.angular_mm_per_100mm,
+            standard=standard,
             diagnosed_fault_id=request.data.get("diagnosed_fault") or None,
             created_by=request.user,
             **_phase_fields("before", request.data),
@@ -125,16 +132,19 @@ class AlignmentRecordDetailView(APIView):
             )
         if "diagnosed_fault" in request.data:
             record.diagnosed_fault_id = request.data["diagnosed_fault"] or None
-        if "rpm" in request.data:
-            rpm = _decimal(request.data["rpm"])
-            if rpm is not None:
-                record.rpm = rpm
-                # The tolerance is re-frozen only when the speed itself
-                # changes — editing a photo caption must never reopen a
-                # verdict the customer already read (AC-05).
-                tolerance = _tolerance_for(request.company_id, record.asset_group, rpm)
-                record.tolerance_parallel_mm = tolerance.parallel_mm
-                record.tolerance_angular_mm_per_100mm = tolerance.angular_mm_per_100mm
+        rpm = _decimal(request.data.get("rpm")) if "rpm" in request.data else None
+        if "standard" in request.data:
+            record.standard = _standard(request, request.data["standard"])
+        if rpm is not None or "standard" in request.data:
+            record.rpm = rpm if rpm is not None else record.rpm
+            # The tolerance is re-frozen only when the speed or the norma
+            # changes — editing a photo caption must never reopen a verdict
+            # the customer already read (AC-05).
+            tolerance = _tolerance_for(
+                request.company_id, record.asset_group, record.rpm, record.standard
+            )
+            record.tolerance_parallel_mm = tolerance.parallel_mm
+            record.tolerance_angular_mm_per_100mm = tolerance.angular_mm_per_100mm
         for phase in ("before", "after"):
             for field, value in _phase_fields(phase, request.data).items():
                 setattr(record, field, value)
@@ -215,19 +225,112 @@ def _visit_or_none(request, visit_id):
     return visit
 
 
-def _tolerance_for(company_id: int, group: AssetGroup, rpm: Decimal) -> Tolerance:
-    """The train's own override tier if one covers this RPM; the global chart
-    otherwise. Never raises: a chart with no tier for an unusual speed still
-    returns the strictest tier, which is the safe direction to guess wrong."""
-    override = (
-        AlignmentTolerance.objects.for_company(company_id)
-        .filter(Q(asset_group=group) | Q(asset_group__isnull=True))
-        .order_by(F("asset_group_id").asc(nulls_last=True), F("rpm_ceiling").asc(nulls_last=True))
+def _tolerance_for(company_id: int, group: AssetGroup, rpm: Decimal, standard=None) -> Tolerance:
+    """The train's own override tier if one covers this RPM; the chosen
+    norma's scale otherwise (the SKF one when none was chosen); the built-in
+    chart as a last resort. Never raises."""
+    override = AlignmentTolerance.objects.for_company(company_id).filter(asset_group=group)
+    found = tier_for(rpm, [_tier(row) for row in override])
+    if found is not None:
+        return found
+    norma = standard or _default_standard(company_id)
+    scale = AlignmentTolerance.objects.filter(standard=norma, asset_group__isnull=True) if norma else []
+    return tier_for(rpm, [_tier(row) for row in scale]) or default_tolerance_for(rpm)
+
+
+def _tier(row: AlignmentTolerance):
+    return (row.rpm_ceiling, row.parallel_mm, row.angular_mm_per_100mm)
+
+
+def _default_standard(company_id: int):
+    from modules.thresholds.models import ThresholdStandard
+
+    return ThresholdStandard.objects.for_company(company_id).filter(code=SKF_NORMA_CODE).first()
+
+
+def _standard(request, standard_id):
+    """A norma of this company that judges alignment."""
+    if not standard_id:
+        return None
+    from modules.thresholds.models import ThresholdStandard
+
+    norma = (
+        ThresholdStandard.objects.for_company(request.company_id)
+        .filter(id=standard_id, is_active=True, techniques__code="alignment")
+        .first()
     )
-    for row in override:
-        if row.rpm_ceiling is None or float(rpm) < row.rpm_ceiling:
-            return Tolerance(row.parallel_mm, row.angular_mm_per_100mm)
-    return default_tolerance_for(rpm)
+    if norma is None:
+        raise ValidationError("Esa norma no existe o no es de alineamiento")
+    return norma
+
+
+class AlignmentScaleView(APIView):
+    """The RPM scale of an alignment norma (Q10): what Normas shows and edits.
+
+    `PUT` replaces the tiers. Records already emitted keep the tolerance they
+    froze, so editing the scale never repaints a report the client read.
+    """
+
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request, standard_id: int):
+        norma = _scale_norma(request, standard_id)
+        tiers = AlignmentTolerance.objects.filter(standard=norma, asset_group__isnull=True)
+        return Response(_tiers_payload(tiers))
+
+    @tenant_atomic
+    def put(self, request, standard_id: int):
+        actor = build_actor(request.user, request.company_id)
+        if not actor.has("thresholds.manage_standard"):
+            raise PermissionDenied("Falta el permiso thresholds.manage_standard")
+        norma = _scale_norma(request, standard_id)
+        tiers = [
+            (int(row["rpm_ceiling"]) if row.get("rpm_ceiling") not in (None, "") else None,
+             _required(row.get("parallel_mm")), _required(row.get("angular_mm_per_100mm")))
+            for row in request.data.get("tiers") or []
+        ]
+        try:
+            check_tiers(tiers)
+        except InvalidTiersError as cause:
+            raise ValidationError(str(cause)) from cause
+
+        current = AlignmentTolerance.objects.filter(standard=norma, asset_group__isnull=True)
+        before = _tiers_payload(current)
+        current.delete()
+        AlignmentTolerance.objects.bulk_create([
+            AlignmentTolerance(company_id=request.company_id, standard=norma, rpm_ceiling=ceiling,
+                               parallel_mm=parallel, angular_mm_per_100mm=angular)
+            for ceiling, parallel, angular in tiers
+        ])
+        audit.record(request, "alignment.scale_changed", object_type="threshold_standard",
+                     object_id=norma.id, before={"tiers": before}, after={"tiers": _tiers_payload(
+                         AlignmentTolerance.objects.filter(standard=norma, asset_group__isnull=True))})
+        return self.get(request, standard_id)
+
+
+def _scale_norma(request, standard_id: int):
+    from modules.thresholds.models import ThresholdStandard
+
+    norma = ThresholdStandard.objects.for_company(request.company_id).filter(id=standard_id).first()
+    if norma is None:
+        raise ValidationError("Esa norma no existe")
+    return norma
+
+
+def _tiers_payload(rows) -> list[dict]:
+    ordered = sorted(rows, key=lambda row: (row.rpm_ceiling is None, row.rpm_ceiling or 0))
+    return [
+        {"rpm_ceiling": row.rpm_ceiling, "parallel_mm": str(row.parallel_mm.normalize()),
+         "angular_mm_per_100mm": str(row.angular_mm_per_100mm.normalize())}
+        for row in ordered
+    ]
+
+
+def _required(raw) -> Decimal:
+    value = _decimal(raw)
+    if value is None:
+        raise ValidationError("Cada tramo necesita sus dos tolerancias")
+    return value
 
 
 def _phase_fields(phase: str, data) -> dict:
@@ -272,6 +375,9 @@ def _payload(request, record: AlignmentRecord) -> dict:
         "notes": record.notes,
         "created_at": record.created_at.isoformat(),
         "created_by": record.created_by.get_full_name() if record.created_by else "",
+        "standard": (
+            {"id": record.standard_id, "name": record.standard.name} if record.standard_id else None
+        ),
         "tolerance": {
             "parallel_mm": str(record.tolerance_parallel_mm),
             "angular_mm_per_100mm": str(record.tolerance_angular_mm_per_100mm),

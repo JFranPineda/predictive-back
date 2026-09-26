@@ -7,11 +7,17 @@ their four As Corrected counterparts, all of which pass.
 
 from decimal import Decimal
 
+import pytest
+
 from modules.alignment.domain.tolerances import (
+    DEFAULT_TIERS,
     AxisValues,
+    InvalidTiersError,
     Tolerance,
+    check_tiers,
     default_tolerance_for,
     evaluate,
+    tier_for,
     within,
 )
 
@@ -65,3 +71,36 @@ def test_tolerance_tightens_as_speed_climbs():
     fast = default_tolerance_for(3600)
     assert fast.parallel_mm < slow.parallel_mm
     assert fast.angular_mm_per_100mm < slow.angular_mm_per_100mm
+
+
+# Q10: the RPM chart is a norma's scale, edited from Normas.
+
+
+def test_a_norma_scale_picks_its_tier_by_speed():
+    scale = [(1500, Decimal("0.08"), Decimal("0.06")), (None, Decimal("0.04"), Decimal("0.03"))]
+    assert tier_for(1200, scale) == Tolerance(Decimal("0.08"), Decimal("0.06"))
+    assert tier_for(1500, scale) == Tolerance(Decimal("0.04"), Decimal("0.03"))
+    assert tier_for(1200, []) is None
+
+
+def test_the_tiers_can_come_in_any_order():
+    scale = [(None, Decimal("0.03"), Decimal("0.03")), (1000, Decimal("0.10"), Decimal("0.10"))]
+    assert tier_for(900, scale) == Tolerance(Decimal("0.10"), Decimal("0.10"))
+
+
+@pytest.mark.parametrize(
+    ("tiers", "message"),
+    [
+        ([], "al menos"),
+        ([(None, Decimal("0.1"), Decimal("0.1")), (1000, Decimal("0.1"), Decimal("0.1"))], "último"),
+        ([(2000, Decimal("0.1"), Decimal("0.1")), (1000, Decimal("0.1"), Decimal("0.1"))], "menor a mayor"),
+        ([(1000, Decimal("0"), Decimal("0.1"))], "mayores que cero"),
+    ],
+)
+def test_a_scale_reads_top_to_bottom(tiers, message):
+    with pytest.raises(InvalidTiersError, match=message):
+        check_tiers(tiers)
+
+
+def test_the_shipped_chart_is_a_valid_scale():
+    check_tiers(list(DEFAULT_TIERS))
