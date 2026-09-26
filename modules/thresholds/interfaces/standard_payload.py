@@ -55,10 +55,15 @@ def scale_of(row, language: str) -> list[dict]:
                     "status_code": band.status.code,
                     "status_name": band.status.translated("name", language),
                     "color": band.status.color,
-                    "min_value": None if band.min_value is None else str(band.min_value.normalize()),
-                    "max_value": None if band.max_value is None else str(band.max_value.normalize()),
+                    "min_value": _plain(band.min_value),
+                    "max_value": _plain(band.max_value),
                 }
                 for band in threshold_set.bands.all()
             ],
         })
     return scale
+
+
+def _plain(value) -> str | None:
+    """82.0000 → "82", not "8.2E+1": normalize alone writes 10 as 1E+1."""
+    return None if value is None else format(value.normalize(), "f")

@@ -320,8 +320,8 @@ def _scale_norma(request, standard_id: int):
 def _tiers_payload(rows) -> list[dict]:
     ordered = sorted(rows, key=lambda row: (row.rpm_ceiling is None, row.rpm_ceiling or 0))
     return [
-        {"rpm_ceiling": row.rpm_ceiling, "parallel_mm": str(row.parallel_mm.normalize()),
-         "angular_mm_per_100mm": str(row.angular_mm_per_100mm.normalize())}
+        {"rpm_ceiling": row.rpm_ceiling, "parallel_mm": format(row.parallel_mm.normalize(), "f"),
+         "angular_mm_per_100mm": format(row.angular_mm_per_100mm.normalize(), "f")}
         for row in ordered
     ]
 
