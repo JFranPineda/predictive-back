@@ -33,6 +33,9 @@ class Technique(TranslatableModel):
     # ordinary ownership check — read by `services`, owned by whichever
     # optional module cares (V3-18's "plan_required"). Blank: nothing extra.
     close_requirement = models.SlugField(max_length=30, blank=True)
+    # Tintes penetrantes, partículas magnéticas (V3-20): no reading plan, no
+    # colour on the plant view — a visit is just a photo and a conclusion.
+    evidence_only = models.BooleanField(default=False)
 
 
 class Magnitude(TranslatableModel):

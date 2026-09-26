@@ -329,15 +329,32 @@ def _find(queryset, pk, label: str):
 
 
 def _close_blocker(visit: ServiceVisit) -> str | None:
-    """What `Technique.close_requirement` asks for, checked generically so
-    `services` never has to import the optional module that owns it."""
-    requirement = visit.service_order.technique.close_requirement
-    if requirement == "plan_required":
+    """What `Technique.close_requirement`/`evidence_only` ask for, checked
+    generically so `services` never has to import the optional module that
+    owns the rule."""
+    technique = visit.service_order.technique
+    if technique.close_requirement == "plan_required":
         from modules.media.infrastructure.models import MediaAsset
 
         has_plan = MediaAsset.objects.filter(
             company_id=visit.company_id, owner_type="visit", owner_id=visit.id,
             kind="topography_plan",
         ).exists()
-        return None if has_plan else "Debes subir el plano antes de cerrar la visita"
+        if not has_plan:
+            return "Debes subir el plano antes de cerrar la visita"
+
+    if technique.evidence_only:
+        from modules.diagnostics.infrastructure.models import EquipmentLogEntry
+        from modules.media.infrastructure.models import MediaAsset
+
+        has_photo = MediaAsset.objects.filter(
+            company_id=visit.company_id, owner_type="visit", owner_id=visit.id,
+        ).exists()
+        if not has_photo:
+            return "Debes subir al menos una foto antes de cerrar la visita"
+        has_conclusion = EquipmentLogEntry.objects.filter(
+            company_id=visit.company_id, service_visit_id=visit.id, entry_type="conclusion",
+        ).exists()
+        if not has_conclusion:
+            return "Debes escribir una conclusión antes de cerrar la visita"
     return None

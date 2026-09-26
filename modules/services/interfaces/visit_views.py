@@ -107,6 +107,7 @@ class VisitDetailView(APIView):
             },
             "technique_code": visit.service_order.technique.code,
             "technique_name": visit.service_order.technique.translated("name", language),
+            "evidence_only": visit.service_order.technique.evidence_only,
             "visited_at": visit.visited_at.isoformat(),
             "instrument": visit.instrument.name if visit.instrument else None,
             "availability_status": _status(visit.availability_status, language),

@@ -92,6 +92,8 @@ TECHNIQUES = [
     ("lubrication", "Lubricación", "Lubrication", "operating_data"),
     ("alignment", "Alineamiento", "Alignment", "alignment"),
     ("topography", "Topografía", "Topography", "topography"),
+    ("ndt_penetrant", "Tintes penetrantes", "Dye penetrant testing", "measurements"),
+    ("ndt_magnetic", "Partículas magnéticas", "Magnetic particle testing", "measurements"),
 ]
 
 MAGNITUDES = [
@@ -291,6 +293,11 @@ class Command(BaseCommand):
         # close-time check is what makes it mandatory.
         techniques["topography"].close_requirement = "plan_required"
         techniques["topography"].save(update_fields=["close_requirement"])
+        # No magnitude, no reading plan: a photo and a conclusion are what
+        # closes one of these visits (V3-20).
+        for code in ("ndt_penetrant", "ndt_magnetic"):
+            techniques[code].evidence_only = True
+            techniques[code].save(update_fields=["evidence_only"])
         magnitudes = {
             code: Magnitude.objects.create(
                 code=code, technique=techniques[technique], name=name_es,
