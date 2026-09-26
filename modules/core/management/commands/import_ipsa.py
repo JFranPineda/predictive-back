@@ -150,9 +150,27 @@ DEFAULT_LIMITS = {
     ("env_accel", None): (Decimal("2"), Decimal("2.5")),
 }
 
-# IPSA's four-level thermal scale (Q9), absolute °C. ALERTA (121 to 148) has no
-# status of its own yet, so it counts as ALARMA until the client decides.
-IPSA_THERMAL = (Decimal("82"), Decimal("148"))
+# IPSA's four-level thermal scale (Q9), on the element's absolute Tmax: a norma
+# of its own, chosen per thermography report. ALERTA sits between ALARMA and
+# PARADA, so it is a condition status of its own.
+IPSA_NORMA = (
+    "escala_termica_ipsa",
+    "Escala térmica IPSA",
+    "Hoja TERMOGRAFÍA de EQUIPOS - CONCLUSIONES.xlsx (IPSA, 2025)",
+)
+IPSA_THERMAL = (
+    ("operational", None, Decimal("82")),
+    ("alarm", Decimal("82"), Decimal("121")),
+    ("alert", Decimal("121"), Decimal("148")),
+    ("shutdown", Decimal("148"), None),
+)
+ALERT = {
+    "code": "alert",
+    "name": "Alerta",
+    "severity": 25,
+    "color": "#ea580c",
+    "translations": {"name": {"es": "Alerta", "en": "Alert"}},
+}
 
 INSTRUMENTS = {
     "vibration": ("skf_cmxa80", "SKF Microlog CMXA 80", "SKF"),
@@ -661,19 +679,7 @@ class Command(BaseCommand):
                 "Límite de los informes de IPSA"
                 + (f" · {standards[standard].name}" if standard else " · envolvente en Gs pico"),
             )
-        self._set(
-            company,
-            statuses,
-            "temp",
-            "max",
-            "°C",
-            "global",
-            None,
-            None,
-            *IPSA_THERMAL,
-            "Escala térmica de IPSA: aceptable < 82 °C, alarma 82\u2013121, alerta 121\u2013148 (se cuenta "
-            "como alarma hasta que el cliente decida, Q9), parada ≥ 148",
-        )
+        self._thermal_norma(company, catalogue)
 
         for book in books:
             for limit in book.limits:
@@ -721,6 +727,88 @@ class Command(BaseCommand):
                     f"{book.filename}: la tabla de límites dice alarma {_n(table.normal)} "
                     f"y las filas por columna {shown}; se usa la tabla"
                 )
+
+    def _thermal_norma(self, company, catalogue) -> None:
+        """Q9: IPSA's scale as a norma of the Normas module, applied to
+        thermography, with ALERTA as a fourth condition status."""
+        statuses = catalogue["statuses"]
+        alert = self._get(
+            Status,
+            "estados",
+            company=company,
+            code=ALERT["code"],
+            defaults={
+                "name": ALERT["name"],
+                "kind": "condition",
+                "severity": ALERT["severity"],
+                "color": ALERT["color"],
+                "requires_action": True,
+                "measurable": True,
+                "translations": ALERT["translations"],
+            },
+        )
+        statuses[ALERT["code"]] = alert
+        profile = TechniqueStatusProfile.objects.filter(
+            company=company, technique=catalogue["techniques"]["thermography"]
+        ).first()
+        if profile is not None and not profile.options.filter(status=alert).exists():
+            ladder = ("operational", "alarm", "alert", "shutdown")
+            for option in profile.options.select_related("status"):
+                code = option.status.code
+                option.order = ladder.index(code) if code in ladder else len(ladder) + option.order
+                option.save(update_fields=["order"])
+            TechniqueStatusOption.objects.create(profile=profile, status=alert, order=ladder.index("alert"))
+
+        code, name, source = IPSA_NORMA
+        norma = self._get(
+            ThresholdStandard,
+            "normas",
+            company=company,
+            code=code,
+            defaults={
+                "name": name,
+                "source": source,
+                "translations": {"name": {"es": name}},
+            },
+        )
+        norma.techniques.add(catalogue["techniques"]["thermography"])
+        catalogue["thermal_norma"] = norma
+        lookup = {
+            "company": company,
+            "magnitude_code": "ir_tmax",
+            "aggregation": "max",
+            "scope": "global",
+            "scope_ref_id": None,
+            "standard": norma,
+            "machine_class": None,
+        }
+        if not ThresholdSet.objects.filter(**lookup).exists():
+            row = ThresholdSet.objects.create(
+                **lookup,
+                unit_code="°C",
+                valid_from=datetime(2024, 1, 1).date(),
+                rationale="Escala térmica de IPSA: aceptable < 82 °C, alarma 82\u2013121, "
+                "alerta 121\u2013148, parada \u2265 148",
+            )
+            ThresholdBand.objects.bulk_create(
+                [
+                    ThresholdBand(
+                        threshold_set=row, status=statuses[status], min_value=low, max_value=high, order=order
+                    )
+                    for order, (status, low, high) in enumerate(IPSA_THERMAL)
+                ]
+            )
+            self.made["umbrales"] += 1
+        # The first import loaded this scale as a hand-written 3-band set on
+        # `temp`, ALERTA folded into ALARMA; the norma replaces it.
+        ThresholdSet.objects.filter(
+            company=company,
+            magnitude_code="temp",
+            standard__isnull=True,
+            scope="global",
+            rationale__startswith="Escala térmica de IPSA",
+            is_active=True,
+        ).update(is_active=False)
 
     def _set(
         self, company, statuses, magnitude, aggregation, unit, scope, ref, standard, low, high, rationale
@@ -967,6 +1055,7 @@ class Command(BaseCommand):
         statuses = {s.code: s for s in Status.objects.filter(company=company)}
         analyst = people["CB"]
         kinds = {"background": "background", "present": "conclusion", "recommendation": "recommendation"}
+        norma = ThresholdStandard.objects.get(company=company, code=IPSA_NORMA[0])
 
         for book in books:
             first = next(iter(machines[book.number]["machines"].values()))[0]
@@ -989,8 +1078,13 @@ class Command(BaseCommand):
                         "scheduled_to": book.thermo_day,
                         "status": "done",
                         "lead_analyst": analyst,
+                        "standard": norma,
                     },
                 )
+                if order.standard_id is None:
+                    # A report imported before the norma existed now cites it.
+                    order.standard = norma
+                    order.save(update_fields=["standard"])
                 moment = datetime.combine(book.thermo_day, time(14), LIMA)
                 for item, _ in machines[book.number]["machines"].values():
                     visit, created = ServiceVisit.objects.get_or_create(
