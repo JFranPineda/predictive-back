@@ -52,9 +52,7 @@ class AxisVerdict:
     @property
     def all_ok(self) -> bool:
         checks = (self.angular_h, self.parallel_h, self.angular_v, self.parallel_v)
-        return all(check is not False for check in checks) and any(
-            check is not None for check in checks
-        )
+        return all(check is not False for check in checks) and any(check is not None for check in checks)
 
 
 Tier = tuple[int | None, Decimal, Decimal]
@@ -112,6 +110,87 @@ def evaluate(values: AxisValues, tolerance: Tolerance) -> AxisVerdict:
         angular_v=within(values.angular_v, tolerance.angular_mm_per_100mm),
         parallel_v=within(values.parallel_v, tolerance.parallel_mm),
     )
+
+
+# ---------------------------------------------------------------- states (Q10)
+#
+# A norma's RPM tier is not only a ✓/✗ line: it names the equipment's state
+# for each range of values — "up to 0.05 mm Aceptable, up to 0.10 mm Alarma,
+# above that Parada". Each band is "up to this limit, this state"; one band
+# without limits is what everything above the last limit is. A value is ✓
+# while it falls inside a band with limits.
+
+
+@dataclass(frozen=True, slots=True)
+class Band:
+    status_code: str | None
+    status_name: str
+    color: str
+    severity: int
+    parallel_mm: Decimal | None
+    angular_mm_per_100mm: Decimal | None
+
+    @property
+    def bounded(self) -> bool:
+        return self.parallel_mm is not None and self.angular_mm_per_100mm is not None
+
+
+LIMIT_OF = {"parallel": "parallel_mm", "angular": "angular_mm_per_100mm"}
+
+
+def kind_of(axis: str) -> str:
+    """`angular_h` is judged against the angular limit, `parallel_v` the parallel one."""
+    return axis.split("_")[0]
+
+
+def state_of(value: Decimal | None, kind: str, bands: Sequence[Band]) -> Band | None:
+    """The band a value falls in: the first limit its magnitude does not pass,
+    or the open band above them all. None when there is no value, or no band
+    covers it."""
+    if value is None:
+        return None
+    limit = LIMIT_OF[kind]
+    for band in sorted((b for b in bands if b.bounded), key=lambda b: getattr(b, limit)):
+        if abs(value) <= getattr(band, limit):
+            return band
+    return next((band for band in bands if not band.bounded), None)
+
+
+def worst(states: Sequence[Band | None]) -> Band | None:
+    found = [state for state in states if state is not None and state.status_code]
+    return max(found, key=lambda band: band.severity, default=None)
+
+
+def acceptance(bands: Sequence[Band]) -> Tolerance | None:
+    """The ✓ line of a tier: the widest limits that still have a band."""
+    bounded = [band for band in bands if band.bounded]
+    if not bounded:
+        return None
+    return Tolerance(
+        max(band.parallel_mm for band in bounded),  # type: ignore[type-var]
+        max(band.angular_mm_per_100mm for band in bounded),  # type: ignore[type-var]
+    )
+
+
+def check_bands(bands: Sequence[Band]) -> None:
+    """One tier's bands: at least one with limits, limits above zero that
+    climb with each band, and at most one open band."""
+    bounded = [band for band in bands if band.bounded]
+    if not bounded:
+        raise InvalidTiersError("Cada tramo de RPM necesita al menos un límite")
+    if len(bands) - len(bounded) > 1:
+        raise InvalidTiersError("Solo puede haber un estado «por encima de todos los límites» por tramo")
+    if any(band.parallel_mm <= 0 or band.angular_mm_per_100mm <= 0 for band in bounded):  # type: ignore[operator]
+        raise InvalidTiersError("Las tolerancias deben ser mayores que cero")
+    # In limit order, whatever order they were typed in: both limits climb.
+    ordered = sorted(bounded, key=lambda band: band.parallel_mm)  # type: ignore[arg-type,return-value]
+    for kind in LIMIT_OF.values():
+        limits = [getattr(band, kind) for band in ordered]
+        if any(b <= a for a, b in pairwise(limits)):
+            raise InvalidTiersError("Dentro de un tramo, cada límite debe ser mayor que el anterior")
+    codes = [band.status_code for band in bands if band.status_code]
+    if len(codes) != len(set(codes)):
+        raise InvalidTiersError("Un estado aparece una sola vez por tramo")
 
 
 # The norma the illustrative chart becomes (Q10): its scale is editable from

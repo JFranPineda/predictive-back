@@ -28,8 +28,13 @@ class AlignmentTolerance(TenantModel):
     rpm_ceiling = models.PositiveIntegerField(
         null=True, blank=True, help_text="RPM por debajo de la cual aplica; vacío = sin techo"
     )
-    parallel_mm = models.DecimalField(max_digits=6, decimal_places=3)
-    angular_mm_per_100mm = models.DecimalField(max_digits=6, decimal_places=3)
+    # Q10: a tier's rows are its bands — "up to these limits, this state".
+    # The row without limits is the state above every limit of the tier.
+    status = models.ForeignKey(
+        "thresholds.Status", on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+    parallel_mm = models.DecimalField(max_digits=6, decimal_places=3, null=True, blank=True)
+    angular_mm_per_100mm = models.DecimalField(max_digits=6, decimal_places=3, null=True, blank=True)
 
     class Meta:
         ordering = ["asset_group_id", models.F("rpm_ceiling").asc(nulls_last=True)]
@@ -58,6 +63,10 @@ class AlignmentRecord(TenantModel):
     driven_label = models.CharField(max_length=80, blank=True, help_text="El conducido del acople")
     rpm = models.DecimalField(max_digits=8, decimal_places=1)
     instrument = models.CharField(max_length=120, blank=True)
+    # Q10: an SKF aligner prints before and after on one result screen; any
+    # other aligner gives one screen per phase. Decides the train's images.
+    ALIGNERS = (("skf", "Alineador SKF"), ("other", "Otro alineador"))
+    aligner = models.CharField(max_length=10, choices=ALIGNERS, default="skf")
 
     before_angular_h = models.DecimalField(max_digits=6, decimal_places=3, null=True, blank=True)
     before_parallel_h = models.DecimalField(max_digits=6, decimal_places=3, null=True, blank=True)
@@ -76,6 +85,9 @@ class AlignmentRecord(TenantModel):
     # changed next year must not silently repaint last year's ✓/✗.
     tolerance_parallel_mm = models.DecimalField(max_digits=6, decimal_places=3)
     tolerance_angular_mm_per_100mm = models.DecimalField(max_digits=6, decimal_places=3)
+    # The tier's states as they stood when the record was saved (Q10), so a
+    # scale edited later never repaints the state a report already showed.
+    scale_snapshot = models.JSONField(default=list, blank=True)
     # The norma the tolerance came from, chosen per report (Q10).
     standard = models.ForeignKey(
         "thresholds.ThresholdStandard", on_delete=models.PROTECT, null=True, blank=True,

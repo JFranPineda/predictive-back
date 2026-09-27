@@ -104,3 +104,54 @@ def test_a_scale_reads_top_to_bottom(tiers, message):
 
 def test_the_shipped_chart_is_a_valid_scale():
     check_tiers(list(DEFAULT_TIERS))
+
+
+# Q10: the norma names the equipment's state for each range of values.
+
+from modules.alignment.domain.tolerances import Band, acceptance, check_bands, kind_of, state_of, worst  # noqa: E402
+
+GOOD = Band("operational", "Aceptable", "#16a34a", 0, Decimal("0.05"), Decimal("0.05"))
+WARN = Band("alarm", "Alarma", "#f59e0b", 20, Decimal("0.10"), Decimal("0.08"))
+OUT = Band("shutdown", "Parada", "#dc2626", 30, None, None)
+SCALE = [WARN, OUT, GOOD]
+
+
+def test_a_value_takes_the_state_of_the_first_limit_it_does_not_pass():
+    assert state_of(Decimal("0.03"), "parallel", SCALE) is GOOD
+    assert state_of(Decimal("-0.07"), "parallel", SCALE) is WARN
+    assert state_of(Decimal("0.07"), "angular", SCALE) is WARN
+    assert state_of(Decimal("1.03"), "parallel", SCALE) is OUT
+    assert state_of(None, "parallel", SCALE) is None
+
+
+def test_the_capture_as_found_reads_as_parada_and_as_corrected_as_aceptable():
+    found = [state_of(getattr(AS_FOUND, axis), kind_of(axis), SCALE)
+             for axis in ("angular_h", "parallel_h", "angular_v", "parallel_v")]
+    fixed = [state_of(getattr(AS_CORRECTED, axis), kind_of(axis), SCALE)
+             for axis in ("angular_h", "parallel_h", "angular_v", "parallel_v")]
+    assert worst(found) is OUT
+    assert worst(fixed) is WARN  # angular 0.06 passes 0.05: Alarma, not Aceptable
+    assert acceptance(SCALE) == Tolerance(Decimal("0.10"), Decimal("0.08"))
+
+
+def test_a_tier_without_an_open_band_leaves_values_above_it_without_state():
+    assert state_of(Decimal("0.5"), "parallel", [GOOD]) is None
+
+
+@pytest.mark.parametrize(
+    ("bands", "message"),
+    [
+        ([OUT], "al menos un límite"),
+        ([GOOD, OUT, Band("alarm", "", "", 20, None, None)], "Solo puede haber"),
+        ([GOOD, Band("alarm", "", "", 20, Decimal("0.04"), Decimal("0.08"))], "mayor que el anterior"),
+        ([GOOD, Band("operational", "", "", 0, Decimal("0.2"), Decimal("0.2"))], "una sola vez"),
+        ([Band("operational", "", "", 0, Decimal("0"), Decimal("0.2"))], "mayores que cero"),
+    ],
+)
+def test_a_tier_s_bands_must_read_top_to_bottom(bands, message):
+    with pytest.raises(InvalidTiersError, match=message):
+        check_bands(bands)
+
+
+def test_a_well_formed_tier_passes():
+    check_bands(SCALE)

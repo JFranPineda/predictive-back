@@ -313,22 +313,37 @@ def _alignment(request, visits) -> list[dict]:
 
     if "alignment" not in installed_codes():
         return []
-    from modules.alignment.domain.tolerances import AxisValues, Tolerance, evaluate
+    from modules.alignment.domain.tolerances import (
+        AxisValues,
+        Band,
+        Tolerance,
+        evaluate,
+        kind_of,
+        state_of,
+        worst,
+    )
     from modules.alignment.infrastructure.models import AlignmentRecord
+    from modules.alignment.infrastructure.scales import bands_from
 
+    axes = ("angular_h", "parallel_h", "angular_v", "parallel_v")
     records = []
     for row in AlignmentRecord.objects.for_company(request.company_id).filter(service_visit__in=visits):
         tolerance = Tolerance(row.tolerance_parallel_mm, row.tolerance_angular_mm_per_100mm)
-        phases = {}
+        bands = bands_from(row.scale_snapshot) or [
+            Band(None, "", "", 0, row.tolerance_parallel_mm, row.tolerance_angular_mm_per_100mm)
+        ]
+        phases, states = {}, {}
         for phase in ("before", "after"):
-            values = AxisValues(*(getattr(row, f"{phase}_{axis}") for axis in
-                                  ("angular_h", "parallel_h", "angular_v", "parallel_v")))
+            values = AxisValues(*(getattr(row, f"{phase}_{axis}") for axis in axes))
             verdict = evaluate(values, tolerance)
             phases[phase] = [
                 {"value": "—" if getattr(values, axis) is None else f"{getattr(values, axis):g}",
                  "ok": getattr(verdict, axis)}
-                for axis in ("angular_h", "parallel_h", "angular_v", "parallel_v")
+                for axis in axes
             ]
+            # The equipment's state as found and as left, by the frozen scale (Q10).
+            state = worst([state_of(getattr(values, axis), kind_of(axis), bands) for axis in axes])
+            states[phase] = {"name": state.status_name, "color": state.color} if state else None
         records.append({
             "coupling": f"{row.driver_label} → {row.driven_label}",
             "rpm": f"{row.rpm:g}",
@@ -338,6 +353,8 @@ def _alignment(request, visits) -> list[dict]:
             ),
             "before": phases["before"],
             "after": phases["after"],
+            "before_state": states["before"],
+            "after_state": states["after"],
         })
     return records
 

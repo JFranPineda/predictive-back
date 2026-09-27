@@ -18,16 +18,21 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.alignment.domain.tolerances import (
-    SKF_NORMA_CODE,
     AxisValues,
+    Band,
     InvalidTiersError,
     Tolerance,
+    acceptance,
+    check_bands,
     check_tiers,
     default_tolerance_for,
     evaluate,
-    tier_for,
+    kind_of,
+    state_of,
+    worst,
 )
 from modules.alignment.infrastructure.models import AlignmentRecord, AlignmentTolerance
+from modules.alignment.infrastructure.scales import bands_from, labels, scale_for, snapshot_of, tiers_of
 from modules.assets.models import AssetGroup
 from modules.core.infrastructure import audit
 from modules.core.infrastructure.transactions import tenant_atomic
@@ -37,14 +42,19 @@ from modules.security.domain.policies import can_edit_visit
 from modules.services.infrastructure.visit_refs import visit_ref
 
 PHASES = ("angular_h", "parallel_h", "angular_v", "parallel_v")
-# The 3 "representative" photos (1 of the train, up to 2 of the finding) plus
-# the tool's own before/after screens, one shot each.
-PHOTO_LIMITS = {
-    "alignment_group": 1,
-    "alignment_observation": 2,
-    "alignment_before": 1,
-    "alignment_after": 1,
-}
+ALIGNERS = dict(AlignmentRecord.ALIGNERS)
+
+
+def photo_limits(aligner: str) -> dict[str, int]:
+    """The train's images (Q10): 1 of the train, up to 2 of the finding, and
+    the aligner's own result — one screen with before and after for SKF, one
+    screen per phase for any other aligner."""
+    limits = {"alignment_group": 1, "alignment_observation": 2}
+    if aligner == "skf":
+        limits["alignment_result"] = 1
+    else:
+        limits.update(alignment_before=1, alignment_after=1)
+    return limits
 
 
 class AlignmentRecordListView(APIView):
@@ -58,9 +68,8 @@ class AlignmentRecordListView(APIView):
         if not actor.has("alignment.view"):
             raise PermissionDenied("Falta el permiso alignment.view")
 
-        rows = (
-            AlignmentRecord.objects.for_company(request.company_id)
-            .select_related("asset_group__sector__area", "service_visit", "diagnosed_fault")
+        rows = AlignmentRecord.objects.for_company(request.company_id).select_related(
+            "asset_group__sector__area", "service_visit", "diagnosed_fault"
         )
         if actor.area_ids is not None:
             rows = rows.filter(asset_group__sector__area_id__in=actor.area_ids)
@@ -80,9 +89,11 @@ class AlignmentRecordListView(APIView):
         if not actor.has("alignment.manage"):
             raise PermissionDenied("Falta el permiso alignment.manage")
 
-        group = AssetGroup.objects.for_company(request.company_id).filter(
-            id=request.data.get("asset_group")
-        ).first()
+        group = (
+            AssetGroup.objects.for_company(request.company_id)
+            .filter(id=request.data.get("asset_group"))
+            .first()
+        )
         if group is None:
             raise ValidationError("Debes elegir un conjunto")
 
@@ -94,17 +105,22 @@ class AlignmentRecordListView(APIView):
         if rpm is None:
             raise ValidationError("El RPM es obligatorio: la tolerancia depende de él")
         standard = _standard(request, request.data.get("standard"))
-        tolerance = _tolerance_for(request.company_id, group, rpm, standard)
+        bands, tolerance = _frozen(request, group, rpm, standard)
 
         record = AlignmentRecord.objects.create(
-            company_id=request.company_id, asset_group=group, service_visit=visit,
+            company_id=request.company_id,
+            asset_group=group,
+            service_visit=visit,
             driver_label=(request.data.get("driver_label") or "").strip(),
             driven_label=(request.data.get("driven_label") or "").strip(),
-            rpm=rpm, instrument=(request.data.get("instrument") or "").strip(),
+            rpm=rpm,
+            instrument=(request.data.get("instrument") or "").strip(),
+            aligner=_aligner(request.data.get("aligner") or "skf"),
             backlash_within_tolerance=_bool_or_none(request.data.get("backlash_within_tolerance")),
             notes=(request.data.get("notes") or "").strip(),
             tolerance_parallel_mm=tolerance.parallel_mm,
             tolerance_angular_mm_per_100mm=tolerance.angular_mm_per_100mm,
+            scale_snapshot=snapshot_of(bands),
             standard=standard,
             diagnosed_fault_id=request.data.get("diagnosed_fault") or None,
             created_by=request.user,
@@ -127,11 +143,11 @@ class AlignmentRecordDetailView(APIView):
             if field in request.data:
                 setattr(record, field, (request.data.get(field) or "").strip())
         if "backlash_within_tolerance" in request.data:
-            record.backlash_within_tolerance = _bool_or_none(
-                request.data["backlash_within_tolerance"]
-            )
+            record.backlash_within_tolerance = _bool_or_none(request.data["backlash_within_tolerance"])
         if "diagnosed_fault" in request.data:
             record.diagnosed_fault_id = request.data["diagnosed_fault"] or None
+        if "aligner" in request.data:
+            record.aligner = _aligner(request.data["aligner"])
         rpm = _decimal(request.data.get("rpm")) if "rpm" in request.data else None
         if "standard" in request.data:
             record.standard = _standard(request, request.data["standard"])
@@ -140,11 +156,10 @@ class AlignmentRecordDetailView(APIView):
             # The tolerance is re-frozen only when the speed or the norma
             # changes — editing a photo caption must never reopen a verdict
             # the customer already read (AC-05).
-            tolerance = _tolerance_for(
-                request.company_id, record.asset_group, record.rpm, record.standard
-            )
+            bands, tolerance = _frozen(request, record.asset_group, record.rpm, record.standard)
             record.tolerance_parallel_mm = tolerance.parallel_mm
             record.tolerance_angular_mm_per_100mm = tolerance.angular_mm_per_100mm
+            record.scale_snapshot = snapshot_of(bands)
         for phase in ("before", "after"):
             for field, value in _phase_fields(phase, request.data).items():
                 setattr(record, field, value)
@@ -158,9 +173,9 @@ class AlignmentRecordDetailView(APIView):
 
 
 class AlignmentPhotoView(APIView):
-    """One of the four fixed roles, with the cap V3-17 asks for enforced here
-    — the generic media endpoint has no idea what "3 representative photos"
-    means for this record."""
+    """One of the train's fixed image roles, with its cap enforced here — the
+    generic media endpoint has no idea which screens this aligner prints.
+    `DELETE …/photos/<id>/` takes one back while the record is editable."""
 
     permission_classes = (IsAuthenticated,)
     parser_classes = [MultiPartParser, FormParser]
@@ -168,28 +183,51 @@ class AlignmentPhotoView(APIView):
     def post(self, request, record_id: int):
         record = _writable_record(request, record_id)
         kind = request.data.get("kind")
-        if kind not in PHOTO_LIMITS:
-            raise ValidationError(f"Rol de foto desconocido: {kind}")
+        limits = photo_limits(record.aligner)
+        if kind not in limits:
+            expected = (
+                "una sola imagen de resultado"
+                if record.aligner == "skf"
+                else "una imagen antes y otra después"
+            )
+            raise ValidationError(f"{ALIGNERS[record.aligner]}: el conjunto lleva {expected}")
 
         from modules.media.infrastructure.models import MediaAsset
 
-        existing = MediaAsset.objects.for_company(request.company_id).filter(
-            owner_type="alignment_record", owner_id=record.id, kind=kind
-        ).count()
-        if existing >= PHOTO_LIMITS[kind]:
-            raise ValidationError(
-                f"Ya hay {existing} foto(s) de tipo '{kind}'; el máximo es {PHOTO_LIMITS[kind]}"
-            )
+        existing = (
+            MediaAsset.objects.for_company(request.company_id)
+            .filter(owner_type="alignment_record", owner_id=record.id, kind=kind)
+            .count()
+        )
+        if existing >= limits[kind]:
+            raise ValidationError(f"Ya hay {existing} imagen(es) de ese tipo; el máximo es {limits[kind]}")
 
         try:
             asset, _created = store_upload(
-                company_id=request.company_id, upload=request.FILES.get("file"), kind=kind,
-                owner_type="alignment_record", owner_id=record.id,
-                caption=(request.data.get("caption") or "").strip(), user=request.user,
+                company_id=request.company_id,
+                upload=request.FILES.get("file"),
+                kind=kind,
+                owner_type="alignment_record",
+                owner_id=record.id,
+                caption=(request.data.get("caption") or "").strip(),
+                user=request.user,
             )
         except UploadRejectedError as cause:
             raise ValidationError(str(cause)) from cause
         return Response({"id": asset.id, "kind": asset.kind, "caption": asset.caption}, status=201)
+
+    def delete(self, request, record_id: int, photo_id: int):
+        record = _writable_record(request, record_id)
+        from modules.media.infrastructure.models import MediaAsset
+
+        deleted, _ = (
+            MediaAsset.objects.for_company(request.company_id)
+            .filter(owner_type="alignment_record", owner_id=record.id, id=photo_id)
+            .delete()
+        )
+        if not deleted:
+            raise ValidationError("Esa imagen no es de este alineamiento")
+        return Response(status=204)
 
 
 def _writable_record(request, record_id: int) -> AlignmentRecord:
@@ -225,27 +263,16 @@ def _visit_or_none(request, visit_id):
     return visit
 
 
-def _tolerance_for(company_id: int, group: AssetGroup, rpm: Decimal, standard=None) -> Tolerance:
-    """The train's own override tier if one covers this RPM; the chosen
-    norma's scale otherwise (the SKF one when none was chosen); the built-in
-    chart as a last resort. Never raises."""
-    override = AlignmentTolerance.objects.for_company(company_id).filter(asset_group=group)
-    found = tier_for(rpm, [_tier(row) for row in override])
-    if found is not None:
-        return found
-    norma = standard or _default_standard(company_id)
-    scale = AlignmentTolerance.objects.filter(standard=norma, asset_group__isnull=True) if norma else []
-    return tier_for(rpm, [_tier(row) for row in scale]) or default_tolerance_for(rpm)
+def _frozen(request, group, rpm, standard) -> tuple[list[Band], Tolerance]:
+    """The tier's bands and its ✓ line, to freeze with the record."""
+    bands = scale_for(request.company_id, group, rpm, standard, getattr(request, "language", "es"))
+    return bands, acceptance(bands) or default_tolerance_for(rpm)
 
 
-def _tier(row: AlignmentTolerance):
-    return (row.rpm_ceiling, row.parallel_mm, row.angular_mm_per_100mm)
-
-
-def _default_standard(company_id: int):
-    from modules.thresholds.models import ThresholdStandard
-
-    return ThresholdStandard.objects.for_company(company_id).filter(code=SKF_NORMA_CODE).first()
+def _aligner(raw) -> str:
+    if raw not in ALIGNERS:
+        raise ValidationError("Alineador desconocido: elige SKF u otro alineador")
+    return raw
 
 
 def _standard(request, standard_id):
@@ -267,16 +294,25 @@ def _standard(request, standard_id):
 class AlignmentScaleView(APIView):
     """The RPM scale of an alignment norma (Q10): what Normas shows and edits.
 
-    `PUT` replaces the tiers. Records already emitted keep the tolerance they
-    froze, so editing the scale never repaints a report the client read.
+    Each tier lists its bands — up to these limits, this state — and the
+    state above them all. `PUT` replaces the tiers. Records already emitted
+    keep the scale they froze, so editing it never repaints a report.
     """
 
     permission_classes = (IsAuthenticated,)
 
     def get(self, request, standard_id: int):
         norma = _scale_norma(request, standard_id)
-        tiers = AlignmentTolerance.objects.filter(standard=norma, asset_group__isnull=True)
-        return Response(_tiers_payload(tiers))
+        names = labels(request.company_id, getattr(request, "language", "es"))
+        rows = AlignmentTolerance.objects.filter(standard=norma, asset_group__isnull=True).select_related(
+            "status"
+        )
+        return Response(
+            {
+                "tiers": _tiers_payload(tiers_of(rows, names)),
+                "status_options": list(names.values()),
+            }
+        )
 
     @tenant_atomic
     def put(self, request, standard_id: int):
@@ -284,27 +320,68 @@ class AlignmentScaleView(APIView):
         if not actor.has("thresholds.manage_standard"):
             raise PermissionDenied("Falta el permiso thresholds.manage_standard")
         norma = _scale_norma(request, standard_id)
-        tiers = [
-            (int(row["rpm_ceiling"]) if row.get("rpm_ceiling") not in (None, "") else None,
-             _required(row.get("parallel_mm")), _required(row.get("angular_mm_per_100mm")))
-            for row in request.data.get("tiers") or []
-        ]
+        statuses = _statuses(request)
+        rows = []
+        tiers = []
+        for tier in request.data.get("tiers") or []:
+            ceiling = int(tier["rpm_ceiling"]) if tier.get("rpm_ceiling") not in (None, "") else None
+            bands = []
+            for band in tier.get("bands") or []:
+                status = _status(statuses, band.get("status_code"))
+                bands.append(
+                    (status, _required(band.get("parallel_mm")), _required(band.get("angular_mm_per_100mm")))
+                )
+            beyond = (
+                _status(statuses, tier.get("beyond_status_code")) if tier.get("beyond_status_code") else None
+            )
+            domain = [
+                Band(st.code if st else None, "", "", st.severity if st else 0, par, ang)
+                for st, par, ang in bands
+            ]
+            if beyond is not None:
+                domain.append(Band(beyond.code, "", "", beyond.severity, None, None))
+            try:
+                check_bands(domain)
+            except InvalidTiersError as cause:
+                raise ValidationError(str(cause)) from cause
+            line = acceptance(domain)
+            tiers.append((ceiling, line.parallel_mm, line.angular_mm_per_100mm))
+            rows += [(ceiling, st, par, ang) for st, par, ang in bands]
+            if beyond is not None:
+                rows.append((ceiling, beyond, None, None))
         try:
             check_tiers(tiers)
         except InvalidTiersError as cause:
             raise ValidationError(str(cause)) from cause
 
+        names = labels(request.company_id)
         current = AlignmentTolerance.objects.filter(standard=norma, asset_group__isnull=True)
-        before = _tiers_payload(current)
+        before = _tiers_payload(tiers_of(current.select_related("status"), names))
         current.delete()
-        AlignmentTolerance.objects.bulk_create([
-            AlignmentTolerance(company_id=request.company_id, standard=norma, rpm_ceiling=ceiling,
-                               parallel_mm=parallel, angular_mm_per_100mm=angular)
-            for ceiling, parallel, angular in tiers
-        ])
-        audit.record(request, "alignment.scale_changed", object_type="threshold_standard",
-                     object_id=norma.id, before={"tiers": before}, after={"tiers": _tiers_payload(
-                         AlignmentTolerance.objects.filter(standard=norma, asset_group__isnull=True))})
+        AlignmentTolerance.objects.bulk_create(
+            [
+                AlignmentTolerance(
+                    company_id=request.company_id,
+                    standard=norma,
+                    rpm_ceiling=ceiling,
+                    status=status,
+                    parallel_mm=parallel,
+                    angular_mm_per_100mm=angular,
+                )
+                for ceiling, status, parallel, angular in rows
+            ]
+        )
+        after = AlignmentTolerance.objects.filter(standard=norma, asset_group__isnull=True).select_related(
+            "status"
+        )
+        audit.record(
+            request,
+            "alignment.scale_changed",
+            object_type="threshold_standard",
+            object_id=norma.id,
+            before={"tiers": before},
+            after={"tiers": _tiers_payload(tiers_of(after, names))},
+        )
         return self.get(request, standard_id)
 
 
@@ -317,19 +394,54 @@ def _scale_norma(request, standard_id: int):
     return norma
 
 
-def _tiers_payload(rows) -> list[dict]:
-    ordered = sorted(rows, key=lambda row: (row.rpm_ceiling is None, row.rpm_ceiling or 0))
-    return [
-        {"rpm_ceiling": row.rpm_ceiling, "parallel_mm": format(row.parallel_mm.normalize(), "f"),
-         "angular_mm_per_100mm": format(row.angular_mm_per_100mm.normalize(), "f")}
-        for row in ordered
-    ]
+def _statuses(request) -> dict:
+    from modules.thresholds.models import Status
+
+    return {row.code: row for row in Status.objects.for_company(request.company_id).filter(kind="condition")}
+
+
+def _status(statuses: dict, code):
+    if not code:
+        return None
+    if code not in statuses:
+        raise ValidationError(f"Estado desconocido: {code}")
+    return statuses[code]
+
+
+def _tiers_payload(tiers) -> list[dict]:
+    """Per tier, its bands by limit and the state above them all."""
+
+    def band(item: Band) -> dict:
+        return {
+            "status_code": item.status_code,
+            "status_name": item.status_name,
+            "color": item.color,
+            "parallel_mm": _plain(item.parallel_mm),
+            "angular_mm_per_100mm": _plain(item.angular_mm_per_100mm),
+        }
+
+    payload = []
+    for ceiling, bands in tiers:
+        bounded = sorted((b for b in bands if b.bounded), key=lambda b: b.parallel_mm)
+        beyond = next((b for b in bands if not b.bounded), None)
+        payload.append(
+            {
+                "rpm_ceiling": ceiling,
+                "bands": [band(item) for item in bounded],
+                "beyond": band(beyond) if beyond else None,
+            }
+        )
+    return payload
+
+
+def _plain(value) -> str | None:
+    return None if value is None else format(value.normalize(), "f")
 
 
 def _required(raw) -> Decimal:
     value = _decimal(raw)
     if value is None:
-        raise ValidationError("Cada tramo necesita sus dos tolerancias")
+        raise ValidationError("Cada límite necesita sus dos tolerancias")
     return value
 
 
@@ -343,16 +455,15 @@ def _phase_fields(phase: str, data) -> dict:
 
 def _payload(request, record: AlignmentRecord) -> dict:
     tolerance = Tolerance(record.tolerance_parallel_mm, record.tolerance_angular_mm_per_100mm)
-    before = AxisValues(
-        record.before_angular_h, record.before_parallel_h,
-        record.before_angular_v, record.before_parallel_v,
-    )
-    after = AxisValues(
-        record.after_angular_h, record.after_parallel_h,
-        record.after_angular_v, record.after_parallel_v,
-    )
-    before_verdict = evaluate(before, tolerance)
-    after_verdict = evaluate(after, tolerance)
+    # A record from before states: its ✓ line is its only band.
+    bands = bands_from(record.scale_snapshot) or [
+        Band(None, "", "", 0, record.tolerance_parallel_mm, record.tolerance_angular_mm_per_100mm)
+    ]
+    phases = {}
+    for phase in ("before", "after"):
+        values = AxisValues(*(getattr(record, f"{phase}_{axis}") for axis in PHASES))
+        phases[phase] = _phase_payload(values, evaluate(values, tolerance), bands)
+    after_verdict = evaluate(AxisValues(*(getattr(record, f"after_{axis}") for axis in PHASES)), tolerance)
 
     from modules.media.infrastructure.local_store import store
     from modules.media.infrastructure.models import MediaAsset
@@ -371,6 +482,8 @@ def _payload(request, record: AlignmentRecord) -> dict:
         "driven_label": record.driven_label,
         "rpm": str(record.rpm),
         "instrument": record.instrument,
+        "aligner": record.aligner,
+        "photo_limits": photo_limits(record.aligner),
         "backlash_within_tolerance": record.backlash_within_tolerance,
         "notes": record.notes,
         "created_at": record.created_at.isoformat(),
@@ -382,29 +495,54 @@ def _payload(request, record: AlignmentRecord) -> dict:
             "parallel_mm": str(record.tolerance_parallel_mm),
             "angular_mm_per_100mm": str(record.tolerance_angular_mm_per_100mm),
         },
-        "before": _phase_payload(before, before_verdict),
-        "after": _phase_payload(after, after_verdict),
+        "scale": [
+            {
+                "status": _status_payload(band),
+                "parallel_mm": _plain(band.parallel_mm),
+                "angular_mm_per_100mm": _plain(band.angular_mm_per_100mm),
+            }
+            for band in bands
+        ],
+        "before": phases["before"],
+        "after": phases["after"],
+        # The equipment's state as found and as left (Q10).
+        "found_state": phases["before"]["state"],
+        "state": phases["after"]["state"],
         "all_ok": after_verdict.all_ok,
         "photos": [
             {
-                "id": photo.id, "kind": photo.kind, "caption": photo.caption,
+                "id": photo.id,
+                "kind": photo.kind,
+                "caption": photo.caption,
                 "url": backend.url(photo.original_key),
                 "thumb_url": backend.url((photo.derivatives or {}).get("thumb", {}).get("key"))
-                if (photo.derivatives or {}).get("thumb") else None,
+                if (photo.derivatives or {}).get("thumb")
+                else None,
             }
             for photo in photos
         ],
     }
 
 
-def _phase_payload(values: AxisValues, verdict) -> dict:
+def _phase_payload(values: AxisValues, verdict, bands: list[Band]) -> dict:
+    states = {axis: state_of(getattr(values, axis), kind_of(axis), bands) for axis in PHASES}
     return {
-        axis: {
-            "value": str(getattr(values, axis)) if getattr(values, axis) is not None else None,
-            "ok": getattr(verdict, axis),
-        }
-        for axis in PHASES
+        **{
+            axis: {
+                "value": str(getattr(values, axis)) if getattr(values, axis) is not None else None,
+                "ok": getattr(verdict, axis),
+                "status": _status_payload(states[axis]),
+            }
+            for axis in PHASES
+        },
+        "state": _status_payload(worst(list(states.values()))),
     }
+
+
+def _status_payload(band: Band | None) -> dict | None:
+    if band is None or not band.status_code:
+        return None
+    return {"code": band.status_code, "name": band.status_name, "color": band.color}
 
 
 def _decimal(raw) -> Decimal | None:

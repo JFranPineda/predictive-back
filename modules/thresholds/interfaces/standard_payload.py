@@ -5,6 +5,10 @@ from __future__ import annotations
 
 
 def standard_payload(row, language: str) -> dict:
+    from modules.thresholds.infrastructure.condition_options import condition_options
+
+    techniques = [t.code for t in row.techniques.all()]
+    options = condition_options(row.company_id, techniques, language)
     return {
         "id": row.id,
         "code": row.code,
@@ -22,11 +26,13 @@ def standard_payload(row, language: str) -> dict:
             for mc in row.machine_classes.all()
         ],
         "set_count": row.sets.count(),
-        "scale": scale_of(row, language),
+        "scale": scale_of(row, language, {option["code"]: option["name"] for option in options}),
+        # The states a band of this norma may name, as its service calls them.
+        "status_options": options,
     }
 
 
-def scale_of(row, language: str) -> list[dict]:
+def scale_of(row, language: str, status_names: dict[str, str] | None = None) -> list[dict]:
     """The norma's own global sets, one per magnitude. Sets for one machine
     class stay in Umbrales: they are the class tables, not the scale."""
     from modules.measurements.models import Magnitude
@@ -53,7 +59,8 @@ def scale_of(row, language: str) -> list[dict]:
             "bands": [
                 {
                     "status_code": band.status.code,
-                    "status_name": band.status.translated("name", language),
+                    "status_name": (status_names or {}).get(band.status.code)
+                    or band.status.translated("name", language),
                     "color": band.status.color,
                     "min_value": _plain(band.min_value),
                     "max_value": _plain(band.max_value),

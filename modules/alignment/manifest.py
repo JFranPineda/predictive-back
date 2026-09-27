@@ -3,8 +3,11 @@ from modules.core.domain.manifest import Manifest, MenuItem
 MANIFEST = Manifest(
     code="alignment",
     name="Alineamiento",
-    version="0.2.0",
-    summary="Alineamiento láser antes/después, formato SKF: dos fases, veredicto por tolerancia",
+    version="0.3.0",
+    summary=(
+        "Alineamiento láser antes/después, formato SKF: ocho valores, estado del equipo según "
+        "la norma e imágenes del alineador por conjunto"
+    ),
     category="Análisis predictivo",
     depends=("core", "assets", "services", "security", "diagnostics", "thresholds"),
     auto_install=True,

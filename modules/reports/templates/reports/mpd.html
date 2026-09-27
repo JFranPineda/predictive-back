@@ -75,9 +75,9 @@
 <div class="block">
   <p>{{ record.coupling }} · {{ record.rpm }} rpm · tolerancia {{ record.tolerance }}</p>
   <table>
-    <tr><th></th><th class="num">Angular H</th><th class="num">Paralelo H</th><th class="num">Angular V</th><th class="num">Paralelo V</th></tr>
-    <tr><th>Antes</th>{% for cell in record.before %}<td class="num">{{ cell.value }} {% if cell.ok is True %}<span class="ok">✓</span>{% elif cell.ok is False %}<span class="bad">✗</span>{% endif %}</td>{% endfor %}</tr>
-    <tr><th>Después</th>{% for cell in record.after %}<td class="num">{{ cell.value }} {% if cell.ok is True %}<span class="ok">✓</span>{% elif cell.ok is False %}<span class="bad">✗</span>{% endif %}</td>{% endfor %}</tr>
+    <tr><th></th><th class="num">Angular H</th><th class="num">Paralelo H</th><th class="num">Angular V</th><th class="num">Paralelo V</th><th>Estado</th></tr>
+    <tr><th>Antes</th>{% for cell in record.before %}<td class="num">{{ cell.value }} {% if cell.ok is True %}<span class="ok">✓</span>{% elif cell.ok is False %}<span class="bad">✗</span>{% endif %}</td>{% endfor %}<td>{% if record.before_state %}<span style="color: {{ record.before_state.color }}; font-weight: 600">{{ record.before_state.name }}</span>{% else %}—{% endif %}</td></tr>
+    <tr><th>Después</th>{% for cell in record.after %}<td class="num">{{ cell.value }} {% if cell.ok is True %}<span class="ok">✓</span>{% elif cell.ok is False %}<span class="bad">✗</span>{% endif %}</td>{% endfor %}<td>{% if record.after_state %}<span style="color: {{ record.after_state.color }}; font-weight: 600">{{ record.after_state.name }}</span>{% else %}—{% endif %}</td></tr>
   </table>
 </div>
 {% endfor %}
