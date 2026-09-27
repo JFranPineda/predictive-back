@@ -19,8 +19,8 @@ from modules.core.infrastructure.transactions import tenant_atomic
 from modules.diagnostics.models import EquipmentLogEntry
 from modules.measurements.domain.axes import axis_rank
 from modules.measurements.models import Reading
-from modules.security.application.access import build_actor
 from modules.security.domain.policies import can_edit_visit, can_write_log_entry
+from modules.security.infrastructure.access import build_actor
 from modules.services.infrastructure.visit_refs import visit_ref
 from modules.services.models import ServiceVisit
 
@@ -301,8 +301,8 @@ def _decimal(raw) -> Decimal | None:
 def _evaluate(company_id: int, reading: Reading):
     """Re-runs the cascade for the value just typed, so the status the
     inspector sees is the one the system will report."""
-    from modules.thresholds.application.evaluation import context_for
     from modules.thresholds.domain.services import evaluate, resolve
+    from modules.thresholds.infrastructure.evaluation import context_for
     from modules.thresholds.infrastructure.models import Status
     from modules.thresholds.infrastructure.repositories import DjangoThresholdRepository
 

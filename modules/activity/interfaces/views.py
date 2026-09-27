@@ -21,7 +21,7 @@ from rest_framework.views import APIView
 from modules.activity.domain.describe import KIND_LABELS, KINDS, clean_client_events
 from modules.activity.infrastructure.models import ActivityEvent
 from modules.activity.infrastructure.observer import write
-from modules.security.application.access import build_actor
+from modules.security.infrastructure.access import build_actor
 
 PAGE_SIZE = 50
 EXPORT_LIMIT = 50_000

@@ -25,8 +25,8 @@ from modules.measurements.infrastructure.repositories import (
     DjangoPointContextRepository,
     DjangoReadingRepository,
 )
-from modules.security.application.access import build_actor
 from modules.security.domain.policies import can_record_reading
+from modules.security.infrastructure.access import build_actor
 from modules.services.infrastructure.visit_refs import visit_ref
 from modules.services.models import ServiceVisit
 from modules.thresholds.infrastructure.repositories import DjangoThresholdRepository

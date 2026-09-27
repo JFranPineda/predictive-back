@@ -17,7 +17,7 @@ from rest_framework.views import APIView
 from modules.core.domain.i18n import SUPPORTED_LANGUAGES
 from modules.core.infrastructure.transactions import tenant_atomic
 from modules.measurements.models import Magnitude, Technique
-from modules.security.application.access import build_actor
+from modules.security.infrastructure.access import build_actor
 from modules.thresholds.domain.entities import (
     Aggregation,
     Band,

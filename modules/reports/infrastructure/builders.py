@@ -272,8 +272,8 @@ def _limits(request, equipments, magnitude_code: str, aggregation: str, standard
     """The criteria in force for this magnitude, resolved through the same
     cascade that graded the readings — with the report's norma when the order
     names one — once per machine of the train."""
-    from modules.thresholds.application.evaluation import context_for
     from modules.thresholds.domain.services import resolve
+    from modules.thresholds.infrastructure.evaluation import context_for
     from modules.thresholds.infrastructure.repositories import DjangoThresholdRepository
     from modules.thresholds.models import ThresholdStandard
 

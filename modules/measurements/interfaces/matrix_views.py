@@ -21,8 +21,8 @@ from modules.measurements.domain.axes import axis_rank
 from modules.measurements.domain.magnitude_order import block_sort_key
 from modules.measurements.infrastructure.fixed_tables import planned_fixed
 from modules.measurements.models import Reading
-from modules.security.application.access import build_actor
 from modules.security.domain.policies import VisitRef, can_edit_visit
+from modules.security.infrastructure.access import build_actor
 
 # The order the sheet prints them in.
 SIDE_ORDER = {

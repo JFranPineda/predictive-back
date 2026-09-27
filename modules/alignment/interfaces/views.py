@@ -38,8 +38,8 @@ from modules.core.infrastructure import audit
 from modules.core.infrastructure.transactions import tenant_atomic
 from modules.media.infrastructure.refs import image_ref
 from modules.media.infrastructure.uploads import UploadRejectedError, store_upload
-from modules.security.application.access import build_actor
 from modules.security.domain.policies import can_edit_visit
+from modules.security.infrastructure.access import build_actor
 from modules.services.infrastructure.visit_refs import visit_ref
 
 PHASES = ("angular_h", "parallel_h", "angular_v", "parallel_v")

@@ -33,7 +33,7 @@ class PlantSummaryView(APIView):
                 asset_group__sector__area__plant_id=request.query_params["plant"]
             )
 
-        from modules.security.application.access import allowed_area_ids
+        from modules.security.infrastructure.access import allowed_area_ids
 
         areas = allowed_area_ids(request.user, request.company_id)
         if areas is not None:

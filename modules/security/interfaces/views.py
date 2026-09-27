@@ -71,9 +71,10 @@ class UserCreateView(APIView):
     def post(self, request):
         from rest_framework.exceptions import PermissionDenied
 
-        from modules.security.application.access import build_actor
         from modules.security.domain.actor import Role
-        from modules.security.infrastructure.models import Role as RoleModel, User
+        from modules.security.infrastructure.access import build_actor
+        from modules.security.infrastructure.models import Role as RoleModel
+        from modules.security.infrastructure.models import User
 
         actor = build_actor(request.user, request.company_id)
         if not actor.has("security.manage_user"):
@@ -142,8 +143,8 @@ class UserDetailView(APIView):
     def patch(self, request, user_id: int):
         from rest_framework.exceptions import PermissionDenied
 
-        from modules.security.application.access import build_actor
         from modules.security.domain.actor import Role
+        from modules.security.infrastructure.access import build_actor
         from modules.security.infrastructure.models import Role as RoleModel
 
         actor = build_actor(request.user, request.company_id)
@@ -230,7 +231,7 @@ class UserDetailView(APIView):
         """
         from rest_framework.exceptions import PermissionDenied
 
-        from modules.security.application.access import build_actor
+        from modules.security.infrastructure.access import build_actor
 
         actor = build_actor(request.user, request.company_id)
         if not actor.has("security.manage_user"):

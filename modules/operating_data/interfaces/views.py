@@ -12,8 +12,8 @@ from rest_framework.views import APIView
 from modules.core.infrastructure.transactions import tenant_atomic
 from modules.operating_data.domain.precision import decimals_for, to_precision
 from modules.operating_data.models import OperatingParameter, OperatingReading
-from modules.security.application.access import build_actor
 from modules.security.domain.policies import can_edit_visit
+from modules.security.infrastructure.access import build_actor
 from modules.services.infrastructure.visit_refs import visit_ref
 from modules.services.interfaces.visit_views import _load
 

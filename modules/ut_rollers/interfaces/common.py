@@ -8,8 +8,8 @@ from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from modules.core.infrastructure.edit_locks import edit_lock
-from modules.security.application.access import build_actor
 from modules.security.domain.policies import can_record_reading
+from modules.security.infrastructure.access import build_actor
 from modules.services.infrastructure.visit_refs import visit_ref
 from modules.ut_rollers.domain.rollers import TECHNIQUE
 

@@ -16,7 +16,7 @@ from modules.core.domain.i18n import SUPPORTED_LANGUAGES
 from modules.measurements.domain.families import is_offered
 from modules.measurements.domain.magnitude_order import display_order_for
 from modules.measurements.models import Magnitude, Technique, Unit
-from modules.security.application.access import build_actor
+from modules.security.infrastructure.access import build_actor
 
 AGGREGATIONS = ("rms", "peak", "peak_to_peak", "avg", "max", "min")
 

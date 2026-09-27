@@ -24,8 +24,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.media.infrastructure.refs import image_ref
-from modules.security.application.access import build_actor
 from modules.security.domain.policies import can_edit_visit
+from modules.security.infrastructure.access import build_actor
 from modules.services.infrastructure.visit_refs import visit_ref
 from modules.topography.infrastructure.models import BOXES
 from modules.topography.models import TopographyElementReading, TopographySurvey

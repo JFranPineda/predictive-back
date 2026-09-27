@@ -23,7 +23,7 @@ from modules.measurements.models import Spectrum
 from modules.media.domain.formats import is_image
 from modules.media.infrastructure.local_store import store
 from modules.media.infrastructure.uploads import UploadRejectedError, store_upload
-from modules.security.application.access import build_actor
+from modules.security.infrastructure.access import build_actor
 
 MAX_CSV_BYTES = 8 * 1024 * 1024
 MAX_CAPTION = 2000

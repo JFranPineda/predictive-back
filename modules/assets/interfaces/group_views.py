@@ -15,7 +15,7 @@ from modules.assets.infrastructure.group_overview import (
     train_overview,
 )
 from modules.assets.interfaces.serializers import EquipmentSerializer
-from modules.security.application.access import allowed_area_ids
+from modules.security.infrastructure.access import allowed_area_ids
 
 PAGE_SIZE = 50
 MAX_PAGE_SIZE = 200

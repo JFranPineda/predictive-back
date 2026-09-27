@@ -29,7 +29,7 @@ from modules.assets.models import (
     PointTemplate,
 )
 from modules.core.infrastructure.transactions import tenant_atomic
-from modules.security.application.access import build_actor
+from modules.security.infrastructure.access import build_actor
 
 
 class TemplateRejectedError(ValidationError):

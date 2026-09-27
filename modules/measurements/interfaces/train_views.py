@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.measurements.infrastructure.train_index import ORDERS, TrainIndexRow, train_index
-from modules.security.application.access import allowed_area_ids
+from modules.security.infrastructure.access import allowed_area_ids
 
 PAGE_SIZE = 50
 

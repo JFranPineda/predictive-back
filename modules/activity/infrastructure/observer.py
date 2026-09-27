@@ -124,7 +124,7 @@ def _login_email(request) -> str:
 
 
 def _login_user(email: str, request):
-    from modules.security.application.access import resolve_company
+    from modules.security.infrastructure.access import resolve_company
     from modules.security.models import User
 
     user = User.objects.filter(email__iexact=email).first()

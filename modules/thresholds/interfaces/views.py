@@ -38,7 +38,7 @@ class StatusDetailView(APIView):
         from rest_framework.exceptions import PermissionDenied
 
         from modules.core.domain.i18n import SUPPORTED_LANGUAGES
-        from modules.security.application.access import build_actor
+        from modules.security.infrastructure.access import build_actor
 
         actor = build_actor(request.user, request.company_id)
         if not actor.has("thresholds.manage_status"):
@@ -91,7 +91,7 @@ class StatusDetailView(APIView):
         from rest_framework.exceptions import PermissionDenied, ValidationError
 
         from modules.measurements.models import Reading
-        from modules.security.application.access import build_actor
+        from modules.security.infrastructure.access import build_actor
 
         actor = build_actor(request.user, request.company_id)
         if not actor.has("thresholds.manage_status"):

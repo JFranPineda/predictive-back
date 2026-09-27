@@ -11,7 +11,7 @@ from rest_framework.views import APIView
 
 from modules.assets.models import Equipment
 from modules.nameplate.models import NameplateData
-from modules.security.application.access import build_actor
+from modules.security.infrastructure.access import build_actor
 
 HP_PER_KW = 1 / 0.7457
 

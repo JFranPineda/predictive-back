@@ -27,8 +27,8 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from modules.core.infrastructure.audit import record
-from modules.security.application.access import build_actor
 from modules.security.domain.actor import Role, behaviour_of
+from modules.security.infrastructure.access import build_actor
 from modules.security.models import Membership, User
 
 # No 0/O, 1/I/L: a code read off a label in a dim plant room gets misread.

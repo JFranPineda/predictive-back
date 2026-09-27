@@ -173,8 +173,8 @@ def _bands(request, equipment_id: int) -> list[ExportBand]:
     standard. The printed sheet lists the criteria side by side, each naming
     what it governs, so a band never floats above rows it does not answer for.
     """
-    from modules.thresholds.application.evaluation import context_for
     from modules.thresholds.domain.services import resolve
+    from modules.thresholds.infrastructure.evaluation import context_for
     from modules.thresholds.infrastructure.repositories import DjangoThresholdRepository
 
     equipment = (

@@ -35,7 +35,7 @@ class TenantJWTAuthentication(JWTAuthentication):
 
     @staticmethod
     def _company(user, header: str | None) -> int | None:
-        from modules.security.application.access import resolve_company
+        from modules.security.infrastructure.access import resolve_company
 
         try:
             return resolve_company(user, header)

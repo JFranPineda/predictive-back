@@ -27,7 +27,7 @@ class TenantViewSet(viewsets.ReadOnlyModelViewSet):
         return {**super().get_serializer_context(), "language": getattr(self.request, "language", "es")}
 
     def allowed_areas(self):
-        from modules.security.application.access import allowed_area_ids
+        from modules.security.infrastructure.access import allowed_area_ids
 
         return allowed_area_ids(self.request.user, self.request.company_id)
 

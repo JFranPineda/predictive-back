@@ -15,8 +15,8 @@ from rest_framework.views import APIView
 
 from modules.core.infrastructure.discovery import discover_manifests
 from modules.core.infrastructure.transactions import tenant_atomic
-from modules.security.application.access import build_actor
 from modules.security.domain.actor import Role as RoleEnum
+from modules.security.infrastructure.access import build_actor
 from modules.security.models import Membership, Permission, Role
 
 # What a company-made role may borrow its behaviour from. Platform admin is

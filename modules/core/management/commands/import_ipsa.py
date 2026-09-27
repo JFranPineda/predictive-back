@@ -975,8 +975,8 @@ class Command(BaseCommand):
 
     def _rounds(self, company, plant, books, machines, catalogue, people) -> dict:
         """One visit per machine and dated column; one order per round date."""
-        from modules.thresholds.application.evaluation import context_for
         from modules.thresholds.domain.services import evaluate, resolve
+        from modules.thresholds.infrastructure.evaluation import context_for
         from modules.thresholds.infrastructure.repositories import DjangoThresholdRepository
 
         statuses, magnitudes = catalogue["statuses"], catalogue["magnitudes"]

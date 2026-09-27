@@ -12,8 +12,8 @@ from modules.diagnostics.domain.other_fault import (
     other_fault_text,
 )
 from modules.diagnostics.models import FaultMode
-from modules.security.application.access import build_actor
 from modules.security.domain.policies import can_write_log_entry
+from modules.security.infrastructure.access import build_actor
 from modules.services.infrastructure.visit_refs import visit_ref
 from modules.services.interfaces.visit_views import _load
 

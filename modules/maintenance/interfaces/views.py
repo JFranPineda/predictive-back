@@ -17,7 +17,7 @@ from rest_framework.views import APIView
 
 from modules.core.infrastructure.audit import record
 from modules.maintenance.models import WorkRecord, WorkRecordResponsible
-from modules.security.application.access import build_actor
+from modules.security.infrastructure.access import build_actor
 
 WORK_TYPE_CODES = {code for code, _ in WorkRecord.WORK_TYPES}
 

@@ -15,7 +15,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.core.infrastructure.models import AuditLog
-from modules.security.application.access import build_actor
+from modules.security.infrastructure.access import build_actor
 
 PAGE_SIZE = 50
 

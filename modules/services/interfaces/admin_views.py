@@ -21,12 +21,12 @@ from modules.diagnostics.models import EquipmentLogEntry
 from modules.licensing.infrastructure.context import current_alias
 from modules.measurements.domain.families import is_offered
 from modules.measurements.models import Instrument, Technique
-from modules.security.application.access import build_actor
 from modules.security.domain.policies import (
     can_change_order_status,
     can_edit_visit,
     can_write_log_entry,
 )
+from modules.security.infrastructure.access import build_actor
 from modules.services.domain.order_status import CANCELLED, PLANNED, can_transition
 from modules.services.infrastructure.order_queries import analysts_of
 from modules.services.infrastructure.visit_refs import visit_ref

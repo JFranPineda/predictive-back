@@ -23,8 +23,8 @@ from modules.measurements.domain.thermography import DELTA_TEMP, IR_TMAX, thermo
 from modules.measurements.infrastructure.models import Magnitude, Reading, Unit
 from modules.media.domain.flir import extract, suggest_max_celsius
 from modules.media.infrastructure.uploads import UploadRejectedError, store_upload
-from modules.security.application.access import build_actor
 from modules.security.domain.policies import can_record_reading
+from modules.security.infrastructure.access import build_actor
 from modules.services.infrastructure.visit_refs import visit_ref
 from modules.services.interfaces.visit_views import _load
 
@@ -114,8 +114,8 @@ def _write_reading(company_id: int, visit, point, magnitude, value, asset) -> Re
 def _grade(company_id: int, visit, reading: Reading) -> None:
     """With the norma the visit's report cites (Q9): IPSA's four-level scale
     in one report, NETA in another. No norma that covers it: "sin norma"."""
-    from modules.thresholds.application.evaluation import context_for
     from modules.thresholds.domain.services import evaluate, resolve
+    from modules.thresholds.infrastructure.evaluation import context_for
     from modules.thresholds.infrastructure.models import Status
     from modules.thresholds.infrastructure.repositories import DjangoThresholdRepository
 

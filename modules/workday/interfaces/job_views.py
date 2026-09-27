@@ -13,7 +13,7 @@ from rest_framework.views import APIView
 from modules.core.infrastructure.audit import record
 from modules.core.infrastructure.transactions import tenant_atomic
 from modules.media.infrastructure.refs import image_ref
-from modules.security.application.access import build_actor
+from modules.security.infrastructure.access import build_actor
 from modules.workday.domain.rules import (
     CLOSE_SERVICE,
     IPERC_LEVELS,

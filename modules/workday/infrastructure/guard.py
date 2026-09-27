@@ -85,7 +85,7 @@ def _refusal(company_id: int, subject) -> tuple[int, str, str] | None:
 
 
 def _manages(user, company_id: int) -> bool:
-    from modules.security.application.access import permissions_for
+    from modules.security.infrastructure.access import permissions_for
 
     return MANAGE in permissions_for(user, company_id)
 
@@ -102,7 +102,7 @@ def _identify(request):
     from rest_framework_simplejwt.authentication import JWTAuthentication
     from rest_framework_simplejwt.exceptions import AuthenticationFailed, InvalidToken
 
-    from modules.security.application.access import resolve_company
+    from modules.security.infrastructure.access import resolve_company
 
     auth = JWTAuthentication()
     header = auth.get_header(request)

@@ -21,8 +21,8 @@ from modules.core.infrastructure.audit import record
 from modules.media.infrastructure.local_store import store
 from modules.media.infrastructure.uploads import UploadRejectedError, release, store_upload
 from modules.media.models import MediaAsset
-from modules.security.application.access import build_actor
 from modules.security.domain.policies import MediaRef, can_delete_media, can_edit_media
+from modules.security.infrastructure.access import build_actor
 
 PAGE_SIZE = 60
 MAX_PAGE_SIZE = 200

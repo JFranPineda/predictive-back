@@ -69,7 +69,7 @@ class BootstrapView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        from modules.security.application.access import permissions_for, visible_companies
+        from modules.security.infrastructure.access import permissions_for, visible_companies
 
         infos = [i for i in build_installer().catalog() if i.state == "installed"]
         granted = permissions_for(request.user, request.company_id)

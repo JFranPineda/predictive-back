@@ -4,8 +4,8 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
-from modules.security.application.access import build_actor
 from modules.security.domain.policies import VisitRef, can_edit_visit
+from modules.security.infrastructure.access import build_actor
 from modules.services.models import ServiceVisit
 
 

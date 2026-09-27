@@ -16,7 +16,7 @@ from rest_framework.views import APIView
 
 from modules.reports.infrastructure.builders import build_corrective, build_end, build_monthly, build_mpd
 from modules.reports.infrastructure.render import respond
-from modules.security.application.access import build_actor
+from modules.security.infrastructure.access import build_actor
 
 FORMATS = ("html", "pdf", "xlsx")
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from modules.thresholds.application.evaluation import context_for
+from modules.thresholds.infrastructure.evaluation import context_for
 
 
 def regrade(readings, standard=None) -> int:
