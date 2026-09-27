@@ -71,7 +71,9 @@ def install() -> None:
             engineer = Role.objects.filter(company=company, code="engineer").first()
             if engineer is not None:
                 chief.permissions.set(engineer.permissions.all())
-            chief.permissions.add(*[permissions[c] for c in CHIEF_ENGINEER["permissions"] if c in permissions])
+            chief.permissions.add(
+                *[permissions[c] for c in CHIEF_ENGINEER["permissions"] if c in permissions]
+            )
 
         for row in Role.objects.filter(company=company, permissions__code="workday.manage"):
             if not row.permissions.filter(code__in=WITH_MANAGE).exists():

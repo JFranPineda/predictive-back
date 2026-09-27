@@ -204,17 +204,17 @@ def _of_alignment(view_name, view_kwargs, body):
 
 
 def _of_topography(view_kwargs, body):
+    """A roller row names its visit; the survey endpoints carry `visit_id`
+    in the URL and never reach here."""
     visit_id = body.get("service_visit")
-    for key, model in (("reading_id", "TopographyElementReading"), ("survey_id", "TopographySurvey")):
-        if key in view_kwargs:
-            from modules.topography import models
+    if "reading_id" in view_kwargs:
+        from modules.topography.models import TopographyElementReading
 
-            visit_id = (
-                getattr(models, model)
-                .objects.filter(id=view_kwargs[key])
-                .values_list("service_visit_id", flat=True)
-                .first()
-            )
+        visit_id = (
+            TopographyElementReading.objects.filter(id=view_kwargs["reading_id"])
+            .values_list("service_visit_id", flat=True)
+            .first()
+        )
     return _of_visit(visit_id) if visit_id else None
 
 

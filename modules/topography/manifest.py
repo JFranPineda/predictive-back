@@ -3,10 +3,13 @@ from modules.core.domain.manifest import Manifest
 MANIFEST = Manifest(
     code="topography",
     name="Topografía",
-    version="0.1.0",
-    summary="Nivelación y paralelismo por elemento, sobre el plano de la máquina",
+    version="0.2.0",
+    summary=(
+        "Levantamiento por conjunto: esquema, plano con notas, y por polín los cuatro cuadros de "
+        "paralelismo y nivelación con su foto y los desplazamientos en mm"
+    ),
     category="Análisis predictivo",
-    depends=("core", "assets", "services", "security"),
+    depends=("core", "assets", "services", "security", "media"),
     auto_install=True,
     permissions=(
         ("topography.view", "Ver topografía"),
