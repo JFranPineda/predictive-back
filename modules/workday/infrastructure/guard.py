@@ -62,10 +62,11 @@ def _identify(request):
 
     auth = JWTAuthentication()
     header = auth.get_header(request)
-    raw = auth.get_raw_token(header) if header else None
-    if raw is None:
-        return None, None
     try:
+        # A malformed header raises here too: DRF answers it with a 401.
+        raw = auth.get_raw_token(header) if header else None
+        if raw is None:
+            return None, None
         user = auth.get_user(auth.get_validated_token(raw))
         return user, resolve_company(user, request.headers.get("X-Company-Id"))
     except (InvalidToken, AuthenticationFailed, PermissionError, ValueError):
