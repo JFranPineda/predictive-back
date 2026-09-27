@@ -3,7 +3,7 @@ from modules.core.domain.manifest import Manifest, MenuItem
 MANIFEST = Manifest(
     code="activity",
     name="Registro de actividad",
-    version="0.1.0",
+    version="0.2.0",
     summary=(
         "Quién hizo qué y cuándo: inicios de sesión, clics, altas, cambios, bajas y "
         "subidas de archivos, en una tabla filtrable"
@@ -26,4 +26,5 @@ MANIFEST = Manifest(
         ),
     ),
     request_observer="modules.activity.infrastructure.observer.observe",
+    history_source="modules.activity.infrastructure.history.source",
 )

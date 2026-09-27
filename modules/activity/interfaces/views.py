@@ -21,6 +21,7 @@ from rest_framework.views import APIView
 from modules.activity.domain.describe import KIND_LABELS, KINDS, clean_client_events
 from modules.activity.infrastructure.models import ActivityEvent
 from modules.activity.infrastructure.observer import write
+from modules.core.domain.history import WINDOW_DAYS, window_for
 from modules.security.infrastructure.access import build_actor
 
 PAGE_SIZE = 50
@@ -36,6 +37,7 @@ class ActivityListView(APIView):
     def get(self, request):
         _require(request, "activity.view")
         rows = _filtered(request)
+        window = _window(request)
         total = rows.count()
         counts = {
             row["kind"]: row["n"]
@@ -52,6 +54,11 @@ class ActivityListView(APIView):
                 "total": total,
                 "counts": counts,
                 "next_before": page[-1].id if more and page else None,
+                "window": {
+                    "since": window.start.isoformat(),
+                    "until": window.end.isoformat(),
+                    "days": WINDOW_DAYS,
+                },
             }
         )
 
@@ -154,13 +161,22 @@ def _filtered(request, *, with_kind: bool = True):
         rows = rows.filter(
             Q(description__icontains=term) | Q(user_label__icontains=term) | Q(event__icontains=term)
         )
-    since = parse_date(params.get("since") or "")
-    if since:
-        rows = rows.filter(at__gte=_start_of(since))
-    until = parse_date(params.get("until") or "")
-    if until:
-        rows = rows.filter(at__lt=_start_of(until) + timedelta(days=1))
+    window = _window(request)
+    rows = rows.filter(
+        at__gte=_start_of(window.start), at__lt=_start_of(window.end) + timedelta(days=1)
+    )
     return rows.order_by("-at", "-id")
+
+
+def _window(request):
+    """Two weeks at a time (`core.domain.history`): what is older was filed
+    on disk, and the screen says where."""
+    params = request.query_params
+    return window_for(
+        parse_date(params.get("since") or ""),
+        parse_date(params.get("until") or ""),
+        timezone.localdate(),
+    )
 
 
 def _start_of(day) -> datetime:

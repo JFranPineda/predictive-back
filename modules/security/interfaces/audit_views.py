@@ -8,12 +8,16 @@ of what somebody wanted on record.
 
 from __future__ import annotations
 
+from datetime import datetime, time, timedelta
+
+from django.utils import timezone
 from django.utils.dateparse import parse_date
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from modules.core.domain.history import WINDOW_DAYS, window_for
 from modules.core.infrastructure.models import AuditLog
 from modules.security.infrastructure.access import build_actor
 
@@ -41,10 +45,16 @@ class AuditLogView(APIView):
             queryset = queryset.filter(actor_id=int(params["user"]))
         if params.get("object_type"):
             queryset = queryset.filter(object_type=params["object_type"])
-        if params.get("since"):
-            since = parse_date(params["since"])
-            if since:
-                queryset = queryset.filter(at__date__gte=since)
+        # Two weeks at a time (`core.domain.history`): older entries were
+        # filed on disk, and the screen offers them from there.
+        window = window_for(
+            parse_date(params.get("since") or ""),
+            parse_date(params.get("until") or ""),
+            timezone.localdate(),
+        )
+        queryset = queryset.filter(
+            at__gte=_start_of(window.start), at__lt=_start_of(window.end) + timedelta(days=1)
+        )
         # Keyset on (at, id): the log only grows, and OFFSET on a table that
         # only grows gets slower every day it is useful.
         if params.get("before"):
@@ -70,4 +80,13 @@ class AuditLogView(APIView):
                 for row in rows
             ],
             "next_before": rows[-1].id if more and rows else None,
+            "window": {
+                "since": window.start.isoformat(),
+                "until": window.end.isoformat(),
+                "days": WINDOW_DAYS,
+            },
         })
+
+
+def _start_of(day):
+    return timezone.make_aware(datetime.combine(day, time.min))

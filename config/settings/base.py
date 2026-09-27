@@ -162,6 +162,10 @@ CELERY_BEAT_SCHEDULE = {
 # every developer machine actually has; `s3` signs URLs against object storage.
 MEDIA_BACKEND = os.environ.get("MEDIA_BACKEND", "local")
 MEDIA_ROOT = BASE_DIR / os.environ.get("MEDIA_ROOT", "data/media")
+
+# Where the logs older than the screens' fortnight are filed, one CSV per
+# month per log. A plain folder on purpose: an auditor opens it with Excel.
+HISTORY_ROOT = BASE_DIR / os.environ.get("HISTORY_ROOT", "data/history")
 MEDIA_URL = "/media/"
 
 OBJECT_STORE_ENDPOINT = os.environ.get("OBJECT_STORE_ENDPOINT", "http://localhost:9000")

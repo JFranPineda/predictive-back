@@ -100,3 +100,22 @@ class AuditLog(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=["object_type", "object_id"])]
+
+
+class HistoryFile(TenantModel):
+    """One archived month of one log: what is on disk, so the screens can
+    offer it without walking the filesystem."""
+
+    source = models.SlugField(max_length=40)
+    period = models.CharField(max_length=7, help_text="AAAA-MM")
+    path = models.CharField(max_length=300, help_text="Relative to HISTORY_ROOT")
+    rows = models.PositiveIntegerField(default=0)
+    size = models.PositiveBigIntegerField(default=0)
+    last_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = [("company", "source", "period")]
+        ordering = ["-period"]
+
+    def __str__(self) -> str:
+        return f"{self.source} {self.period}"

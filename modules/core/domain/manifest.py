@@ -52,6 +52,10 @@ class Manifest:
     # be edited right now. Screens ask it to show the fields locked, with the
     # reason, before the write guard would refuse the save.
     edit_lock: str | None = None
+    # Dotted path to `source() -> HistorySource`: a log of this module that
+    # grows forever, so the screen keeps a fortnight and the archiver files
+    # the rest on disk, month by month.
+    history_source: str | None = None
     events_subscribed: tuple[str, ...] = ()
     events_published: tuple[str, ...] = ()
     provides_techniques: tuple[str, ...] = ()
