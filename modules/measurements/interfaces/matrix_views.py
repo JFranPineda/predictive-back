@@ -19,6 +19,7 @@ from rest_framework.views import APIView
 from modules.assets.models import Equipment
 from modules.measurements.domain.axes import axis_rank
 from modules.measurements.domain.magnitude_order import block_sort_key
+from modules.measurements.infrastructure.fixed_tables import planned_fixed
 from modules.measurements.models import Reading
 from modules.security.application.access import build_actor
 from modules.security.domain.policies import VisitRef, can_edit_visit
@@ -114,6 +115,7 @@ def build_matrix(request, equipment: Equipment, scope: str) -> dict:
     actor = build_actor(request.user, request.company_id)
     columns: dict[str, dict] = {}
     blocks: dict[str, dict] = {}
+    techniques: set[int] = set()
 
     for reading in readings:
         # A column is a round, not an instant. The motor and the pump of
@@ -137,50 +139,19 @@ def build_matrix(request, equipment: Equipment, scope: str) -> dict:
             # visits blindly made it jump between two counters.
             if reading.point.equipment_id == equipment.id:
                 entry["primary_visit_id"] = reading.service_visit_id
+            # Which visit of this round each machine has: where a value typed
+            # into an empty cell of a fixed table is written.
+            entry["_visits"][reading.point.equipment_id] = reading.service_visit_id
 
         magnitude = reading.magnitude
-        block = blocks.setdefault(
-            _block_key(reading),
-            {
-                "key": _block_key(reading),
-                "magnitude_code": magnitude.code,
-                "title": magnitude.translated("name", language),
-                "unit": reading.unit.code,
-                "aggregation": reading.aggregation,
-                "decimals": magnitude.decimals,
-                # The trend selector has no axis to offer on a magnitude
-                # read once per bearing.
-                "per_axis": magnitude.per_axis,
-                "display_order": magnitude.display_order,
-                "rows": {},
-            },
+        techniques.add(magnitude.technique_id)
+        key = _block_key(reading)
+        block = blocks.get(key) or blocks.setdefault(
+            key, _new_block(magnitude, reading.unit.code, reading.aggregation, language)
         )
-        # A magnitude read once on the bearing owns one row per point, not
-        # one per axis: the sheet prints "1 ENV", never "1H, 1V, 1A".
-        row_key = (
-            reading.point_id
-            if magnitude.per_axis
-            else (reading.point.equipment_id, reading.point.number)
-        )
-        row = block["rows"].setdefault(
-            row_key,
-            {
-                "point_id": reading.point_id,
-                "label": (
-                    reading.point.label
-                    if magnitude.per_axis
-                    else magnitude.row_label(reading.point.number)
-                ),
-                "number": reading.point.number,
-                "axis": reading.point.axis,
-                "side": reading.point.side,
-                "component": reading.point.equipment.name,
-                "component_id": reading.point.equipment_id,
-                # The train prints in its own order, not in the order the
-                # machines happened to be created.
-                "component_order": reading.point.equipment.order_in_group,
-                "cells": {},
-            },
+        row_key = _row_key(reading.point, magnitude)
+        row = block["rows"].get(row_key) or block["rows"].setdefault(
+            row_key, _new_row(reading.point, magnitude)
         )
         existing_cell = row["cells"].get(column_key)
         # A magnitude read once per bearing seeds one row per axis-point
@@ -202,6 +173,17 @@ def build_matrix(request, equipment: Equipment, scope: str) -> dict:
                 "image_url": _thumb_url(reading.image) if reading.image_id else None,
             }
 
+    # The fixed tables the train's services measure, even before a round
+    # read them: "Aceleración" belongs in the record from the start.
+    for point, magnitude in planned_fixed(equipments, techniques):
+        key = f"{magnitude.code}:{magnitude.default_aggregation}"
+        block = blocks.get(key) or blocks.setdefault(
+            key, _new_block(magnitude, magnitude.default_unit.code, magnitude.default_aggregation, language)
+        )
+        row_key = _row_key(point, magnitude)
+        if row_key not in block["rows"]:
+            block["rows"][row_key] = _new_row(point, magnitude)
+
     ordered_columns = sorted(columns.values(), key=lambda column: column["taken_at"])
     return {
         "equipment": {
@@ -214,16 +196,17 @@ def build_matrix(request, equipment: Equipment, scope: str) -> dict:
         },
         "scope": scope,
         "train": _train(equipment),
-        "columns": ordered_columns,
+        "columns": [_public(column) for column in ordered_columns],
         "blocks": [
             {
-                **block,
+                **_public(block),
                 "rows": sorted(
                     (
                         {
                             **row,
                             "cells": [
-                                row["cells"].get(column["key"]) for column in ordered_columns
+                                row["cells"].get(column["key"]) or _open_cell(column, row, block)
+                                for column in ordered_columns
                             ],
                         }
                         for row in block["rows"].values()
@@ -242,6 +225,72 @@ def build_matrix(request, equipment: Equipment, scope: str) -> dict:
             )
         ],
     }
+
+
+def _new_block(magnitude, unit_code: str, aggregation: str, language: str) -> dict:
+    return {
+        "key": f"{magnitude.code}:{aggregation}",
+        "magnitude_code": magnitude.code,
+        "title": magnitude.translated("name", language),
+        "unit": unit_code,
+        "aggregation": aggregation,
+        "decimals": magnitude.decimals,
+        # The trend selector has no axis to offer on a magnitude read once
+        # per bearing.
+        "per_axis": magnitude.per_axis,
+        "display_order": magnitude.display_order,
+        "_technique_id": magnitude.technique_id,
+        "rows": {},
+    }
+
+
+def _row_key(point, magnitude):
+    # A magnitude read once on the bearing owns one row per point, not one per
+    # axis: the sheet prints "1 ENV", never "1H, 1V, 1A".
+    return point.id if magnitude.per_axis else (point.equipment_id, point.number)
+
+
+def _new_row(point, magnitude) -> dict:
+    return {
+        "point_id": point.id,
+        "label": point.label if magnitude.per_axis else magnitude.row_label(point.number),
+        "number": point.number,
+        "axis": point.axis,
+        "side": point.side,
+        "component": point.equipment.name,
+        "component_id": point.equipment_id,
+        # The train prints in its own order, not in the order the machines
+        # happened to be created.
+        "component_order": point.equipment.order_in_group,
+        "cells": {},
+    }
+
+
+def _open_cell(column: dict, row: dict, block: dict) -> dict | None:
+    """An empty cell that can still be filled: a round of this table's service
+    with a visit of this machine the user may edit. Saving it creates the
+    reading on that visit. Anything else stays a dot."""
+    visit_id = column["_visits"].get(row["component_id"])
+    if not visit_id or not column["can_edit"] or column["_technique_id"] != block["_technique_id"]:
+        return None
+    return {
+        "reading_id": None,
+        "value": None,
+        "status_code": None,
+        "status_color": None,
+        "graded": False,
+        "quality": "missing",
+        "visit_id": visit_id,
+        "image_url": None,
+        "point_id": row["point_id"],
+        "magnitude_code": block["magnitude_code"],
+        "aggregation": block["aggregation"],
+    }
+
+
+def _public(entry: dict) -> dict:
+    """What the screen gets: the bookkeeping keys (`_…`) stay here."""
+    return {key: value for key, value in entry.items() if not key.startswith("_")}
 
 
 def _thumb_url(asset) -> str | None:
@@ -302,6 +351,8 @@ def _column(reading: Reading, actor, equipment: Equipment) -> dict:
     visit = reading.service_visit
     return {
         "key": _column_key(reading),
+        "_visits": {},
+        "_technique_id": visit.service_order.technique_id if visit else None,
         "visit_ids": [],
         "primary_visit_id": None,
         "taken_at": reading.taken_at.isoformat(),

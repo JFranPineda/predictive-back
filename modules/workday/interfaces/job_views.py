@@ -12,15 +12,18 @@ from rest_framework.views import APIView
 
 from modules.core.infrastructure.audit import record
 from modules.core.infrastructure.transactions import tenant_atomic
+from modules.media.infrastructure.refs import image_ref
 from modules.security.application.access import build_actor
 from modules.workday.domain.rules import (
     CLOSE_SERVICE,
     IPERC_LEVELS,
     MANAGE,
+    REGISTER,
     RISK_CATEGORIES,
     ROLE_LABELS,
     START_ROLES,
     UNLOCK_SERVICE,
+    VIEW_JOBS,
     Ats,
     CrewMember,
     ServiceNotClosableError,
@@ -32,7 +35,6 @@ from modules.workday.domain.rules import (
 )
 from modules.workday.models import JobSignature, ServiceJob, Workday
 
-REGISTER = "workday.register_permit"
 HEADER_FIELDS = ("activity", "holder", "unit", "area", "zone", "ppe", "tools")
 MAX_STEPS = 60
 
@@ -44,7 +46,7 @@ class JobCollectionView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def get(self, request, workday_id: int):
-        _require_any(request, (MANAGE, REGISTER, "workday.view_permits"))
+        _require_any(request, (MANAGE, REGISTER, VIEW_JOBS))
         workday = _workday(request, workday_id)
         return Response([job_summary(job) for job in _jobs().filter(workday=workday)])
 
@@ -84,7 +86,7 @@ class JobDetailView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def get(self, request, job_id: int):
-        _require_any(request, (MANAGE, REGISTER, "workday.view_permits"))
+        _require_any(request, (MANAGE, REGISTER, VIEW_JOBS))
         return Response(job_detail(_job(request, job_id)))
 
     @tenant_atomic
@@ -411,14 +413,6 @@ def _status(job: ServiceJob) -> str:
     return "in_progress" if job.started_at else "pending_start"
 
 
-def _url(asset) -> str | None:
-    if asset is None:
-        return None
-    from modules.media.infrastructure.local_store import store
-
-    return store().url(asset.original_key)
-
-
 def _name(user) -> str:
     return user.get_full_name() if user else ""
 
@@ -431,7 +425,7 @@ def _signature(row: JobSignature | None, role: str) -> dict:
         "name": row.name if row else "",
         "position": row.position if row else "",
         "signed_at": row.signed_at.isoformat() if row and row.signed_at else None,
-        "image_url": _url(row.image) if row else None,
+        "image_url": image_ref(row.image)["url"] if row and row.image else None,
     }
 
 

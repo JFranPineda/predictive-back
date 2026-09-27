@@ -9,11 +9,12 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from modules.core.infrastructure.edit_locks import edit_lock
 from modules.core.infrastructure.transactions import tenant_atomic
 from modules.diagnostics.models import EquipmentLogEntry
 from modules.measurements.domain.axes import axis_rank
@@ -46,6 +47,7 @@ class VisitDetailView(APIView):
         visit = _load(request, visit_id)
         actor = build_actor(request.user, request.company_id)
         reference = visit_ref(visit)
+        lock = edit_lock(request, visit_id=visit.id)
         equipment = visit.equipment
         area = equipment.asset_group.sector.area
 
@@ -141,7 +143,9 @@ class VisitDetailView(APIView):
             "other_fault": visit.other_fault or None,
             "is_closed": visit.is_closed,
             "report_issued": False,
-            "can_edit": can_edit_visit(actor, reference),
+            # Another module may keep it read-only for now (the workday, Q19).
+            "lock_reason": lock,
+            "can_edit": can_edit_visit(actor, reference) and lock is None,
         })
 
 
@@ -158,7 +162,8 @@ class VisitReadingsView(APIView):
         if not can_edit_visit(actor, visit_ref(visit)):
             raise PermissionDenied("Esta visita no es tuya o ya está cerrada")
 
-        updates = {int(row["reading_id"]): row.get("value") for row in request.data.get("readings", [])}
+        rows = request.data.get("readings", [])
+        updates = {int(row["reading_id"]): row.get("value") for row in rows if row.get("reading_id")}
         readings = list(
             Reading.objects.for_company(request.company_id)
             .filter(service_visit=visit, id__in=updates)
@@ -195,7 +200,46 @@ class VisitReadingsView(APIView):
                 record(request, "reading.corrected", object_type="reading",
                        object_id=reading.id, before=before, after=after)
             saved += 1
+        saved += _record_new(request, visit, [row for row in rows if not row.get("reading_id")])
         return Response({"saved": saved})
+
+
+def _record_new(request, visit, rows: list[dict]) -> int:
+    """Values typed into an open cell of the record of values: a fixed table
+    (acceleration, say) this round never seeded. Written on this visit, for a
+    point of its machine and a magnitude of its service, and graded like any
+    other reading."""
+    from modules.assets.models import MeasurementPoint
+    from modules.core.infrastructure.audit import record
+    from modules.measurements.models import Magnitude
+
+    saved = 0
+    for row in rows:
+        value = _decimal(row.get("value"))
+        if value is None:
+            continue
+        point = MeasurementPoint.objects.filter(id=row.get("point"), equipment_id=visit.equipment_id).first()
+        if point is None:
+            raise ValidationError("Ese punto no es del equipo de la visita")
+        magnitude = Magnitude.objects.select_related("default_unit").filter(
+            code=row.get("magnitude"), technique_id=visit.service_order.technique_id
+        ).first()
+        if magnitude is None:
+            raise ValidationError("Esa medida no es del servicio de la visita")
+        reading, _ = Reading.objects.get_or_create(
+            company_id=request.company_id, service_visit=visit, point=point, magnitude=magnitude,
+            aggregation=row.get("aggregation") or magnitude.default_aggregation,
+            defaults={"taken_at": visit.visited_at, "unit": magnitude.default_unit, "operator": request.user},
+        )
+        reading.value = value
+        reading.quality = "ok"
+        reading.not_measured_reason = ""
+        reading.condition_status = _evaluate(request.company_id, reading)
+        reading.save()
+        record(request, "reading.recorded", object_type="reading", object_id=reading.id,
+               after={"value": str(value), "magnitude": magnitude.code, "point": point.id})
+        saved += 1
+    return saved
 
 
 class VisitEntriesView(APIView):

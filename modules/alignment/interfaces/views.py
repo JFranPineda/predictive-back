@@ -36,6 +36,7 @@ from modules.alignment.infrastructure.scales import bands_from, labels, scale_fo
 from modules.assets.models import AssetGroup
 from modules.core.infrastructure import audit
 from modules.core.infrastructure.transactions import tenant_atomic
+from modules.media.infrastructure.refs import image_ref
 from modules.media.infrastructure.uploads import UploadRejectedError, store_upload
 from modules.security.application.access import build_actor
 from modules.security.domain.policies import can_edit_visit
@@ -81,6 +82,15 @@ class AlignmentRecordListView(APIView):
             rows = rows.filter(asset_group_id=request.query_params["group"])
         if request.query_params.get("service_visit"):
             rows = rows.filter(service_visit_id=request.query_params["service_visit"])
+        if request.query_params.get("train_of_visit"):
+            # Q10: the alignment is the train's, whichever of its machines'
+            # visits it was recorded from: the motor's and the pump's visit of
+            # one order show the same record.
+            visit = _visit_or_none(request, request.query_params["train_of_visit"])
+            rows = rows.filter(
+                asset_group_id=visit.equipment.asset_group_id,
+                service_visit__service_order_id=visit.service_order_id,
+            )
 
         return Response([_payload(request, row) for row in rows[:200]])
 
@@ -100,6 +110,10 @@ class AlignmentRecordListView(APIView):
         visit = _visit_or_none(request, request.data.get("service_visit"))
         if visit is not None and not can_edit_visit(actor, visit_ref(visit)):
             raise PermissionDenied("Esta visita no es tuya o ya está cerrada")
+        if visit is not None and AlignmentRecord.objects.for_company(request.company_id).filter(
+            asset_group=group, service_visit__service_order_id=visit.service_order_id
+        ).exists():
+            raise ValidationError("Este conjunto ya tiene su alineamiento en esta orden")
 
         rpm = _decimal(request.data.get("rpm"))
         if rpm is None:
@@ -465,10 +479,8 @@ def _payload(request, record: AlignmentRecord) -> dict:
         phases[phase] = _phase_payload(values, evaluate(values, tolerance), bands)
     after_verdict = evaluate(AxisValues(*(getattr(record, f"after_{axis}") for axis in PHASES)), tolerance)
 
-    from modules.media.infrastructure.local_store import store
     from modules.media.infrastructure.models import MediaAsset
 
-    backend = store()
     photos = (
         MediaAsset.objects.for_company(request.company_id)
         .filter(owner_type="alignment_record", owner_id=record.id)
@@ -509,18 +521,7 @@ def _payload(request, record: AlignmentRecord) -> dict:
         "found_state": phases["before"]["state"],
         "state": phases["after"]["state"],
         "all_ok": after_verdict.all_ok,
-        "photos": [
-            {
-                "id": photo.id,
-                "kind": photo.kind,
-                "caption": photo.caption,
-                "url": backend.url(photo.original_key),
-                "thumb_url": backend.url((photo.derivatives or {}).get("thumb", {}).get("key"))
-                if (photo.derivatives or {}).get("thumb")
-                else None,
-            }
-            for photo in photos
-        ],
+        "photos": [image_ref(photo) for photo in photos],
     }
 
 

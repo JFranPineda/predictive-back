@@ -43,7 +43,7 @@ from modules.diagnostics.models import EquipmentLogEntry, FaultMode
 from modules.measurements.domain.acceleration import ACCELERATION
 from modules.measurements.domain.thermography import IR_TMAX_SPEC
 from modules.measurements.domain.families import family_for
-from modules.measurements.domain.magnitude_order import display_order_for
+from modules.measurements.domain.magnitude_order import display_order_for, in_record_by_default
 from modules.measurements.models import Instrument, Magnitude, Reading, Technique, Unit
 from modules.nameplate.models import NameplateData
 from modules.operating_data.models import OperatingParameter, OperatingReading
@@ -303,7 +303,7 @@ class Command(BaseCommand):
             code: Magnitude.objects.create(
                 code=code, technique=techniques[technique], name=name_es,
                 default_unit=units[unit], default_aggregation=aggregation, decimals=decimals,
-                display_order=display_order_for(code),
+                display_order=display_order_for(code), in_record=in_record_by_default(code),
                 translations={"name": {"es": name_es, "en": name_en}},
             )
             for code, technique, name_es, name_en, unit, aggregation, decimals in MAGNITUDES
@@ -314,6 +314,7 @@ class Command(BaseCommand):
             default_unit=units[spec.unit], default_aggregation=spec.aggregation,
             decimals=spec.decimals, per_axis=spec.per_axis, higher_is_worse=spec.higher_is_worse,
             template_only=spec.template_only, display_order=display_order_for(spec.code),
+            in_record=in_record_by_default(spec.code),
             translations={"name": {"es": spec.name_es, "en": spec.name_en}},
         )
         ir = IR_TMAX_SPEC

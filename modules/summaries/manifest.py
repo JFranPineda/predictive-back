@@ -14,7 +14,7 @@ MANIFEST = Manifest(
         ("summaries.manage_palette", "Configurar los colores de los estados"),
     ),
     menu=(
-        MenuItem(label="Informes", route="/summaries", icon="layout-dashboard", order=15,
+        MenuItem(label="Informes de Planta", route="/summaries", icon="layout-dashboard", order=15,
                  permission="summaries.view"),
     ),
     events_subscribed=("EquipmentStatusChanged", "ReadingRecorded"),

@@ -9,7 +9,7 @@ MANIFEST = Manifest(
         "la norma e imágenes del alineador por conjunto"
     ),
     category="Análisis predictivo",
-    depends=("core", "assets", "services", "security", "diagnostics", "thresholds"),
+    depends=("core", "assets", "services", "security", "diagnostics", "thresholds", "media"),
     auto_install=True,
     permissions=(
         ("alignment.view", "Ver alineamientos"),

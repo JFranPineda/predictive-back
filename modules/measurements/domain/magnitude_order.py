@@ -27,6 +27,15 @@ DEFAULT_DISPLAY_ORDER: dict[str, int] = {
 }
 
 
+# The tables the customer's report always carries, in its order: a train its
+# service measures shows them even before a round reads them (`in_record`).
+FIXED_TABLES = frozenset({"vel_rms", "accel_rms", "env_accel", "temp", "us_db", "thickness_mm"})
+
+
+def in_record_by_default(code: str) -> bool:
+    return code in FIXED_TABLES
+
+
 def display_order_for(code: str) -> int:
     return DEFAULT_DISPLAY_ORDER.get(code, UNLISTED)
 

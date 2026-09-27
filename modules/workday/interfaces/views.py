@@ -12,10 +12,13 @@ from rest_framework.views import APIView
 
 from modules.core.infrastructure.audit import record
 from modules.core.infrastructure.transactions import tenant_atomic
+from modules.media.infrastructure.refs import image_ref
 from modules.security.application.access import build_actor
 from modules.workday.domain.rules import (
     MANAGE,
+    REGISTER,
     REOPEN,
+    VIEW_JOBS,
     ObservationIncompleteError,
     check_observation,
 )
@@ -67,8 +70,8 @@ class WorkdayDetailView(APIView):
         row = _workday(request, workday_id)
         from modules.workday.interfaces.job_views import job_summary
 
-        sees_permits = any(
-            actor.has(code) for code in (MANAGE, "workday.view_permits", "workday.register_permit")
+        sees_jobs = any(
+            actor.has(code) for code in (MANAGE, VIEW_JOBS, REGISTER)
         )
         return Response({
             **_summary(row),
@@ -76,7 +79,7 @@ class WorkdayDetailView(APIView):
             "jobs": (
                 [job_summary(job) for job in row.jobs.select_related(
                     "asset_group", "service_order__technique", "closed_by").prefetch_related("signatures")]
-                if sees_permits else None
+                if sees_jobs else None
             ),
             "observations": [
                 _observation(o) for o in row.observations.select_related("asset_group", "photo", "created_by")
@@ -142,7 +145,7 @@ class ObservationCollectionView(APIView):
 
     @tenant_atomic
     def post(self, request, workday_id: int):
-        actor = _require_any(request, (MANAGE, "workday.register_permit"))
+        actor = _require_any(request, (MANAGE, REGISTER))
         row = _open_workday(request, workday_id)
         group = _group(request, row)
         if not actor.has(MANAGE) and not allows(request.company_id, group.id, row.date):
@@ -242,23 +245,6 @@ def _store(request, field, kind, owner_type, owner_id, caption, *, missing):
     return asset
 
 
-def _url(asset) -> str | None:
-    if asset is None:
-        return None
-    from modules.media.infrastructure.local_store import store
-
-    return store().url(asset.original_key)
-
-
-def _thumb(asset) -> str | None:
-    if asset is None:
-        return None
-    from modules.media.infrastructure.local_store import store
-
-    key = (asset.derivatives or {}).get("thumb", {}).get("key")
-    return store().url(key or asset.original_key)
-
-
 def _name(user) -> str:
     return user.get_full_name() if user else ""
 
@@ -286,14 +272,19 @@ def _work(work) -> dict:
     }
 
 
+def _thumb_of(asset) -> str | None:
+    ref = image_ref(asset)
+    return ref and (ref["thumb_url"] or ref["url"])
+
+
 def _observation(observation: FieldObservation) -> dict:
     return {
         "id": observation.id,
         "asset_group": {"id": observation.asset_group_id, "name": observation.asset_group.name},
         "visible": observation.visible,
         "text": observation.text,
-        "photo_url": _url(observation.photo),
-        "photo_thumb": _thumb(observation.photo),
+        "photo_url": (image_ref(observation.photo) or {}).get("url"),
+        "photo_thumb": _thumb_of(observation.photo),
         "created_by": _name(observation.created_by),
         "created_at": observation.created_at.isoformat(),
     }

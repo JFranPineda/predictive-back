@@ -56,6 +56,11 @@ class Magnitude(TranslatableModel):
     # Read only on the points whose kind template lists it (V3-11); the rest
     # are read wherever the service goes.
     template_only = models.BooleanField(default=False)
+    # A fixed table of the record of values: shown on every train its service
+    # measures, even before a round reads it, with empty cells to fill — the
+    # tables the customer's report always carries (velocity, acceleration,
+    # envelope, temperature, ultrasound, thickness). Others show once read.
+    in_record = models.BooleanField(default=False)
     # Velocity is read on three axes of a bearing; the envelope, the
     # temperature of the housing and an ultrasound level are read once on it.
     # Writing them three times is what filled the record of values with rows

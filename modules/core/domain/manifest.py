@@ -47,6 +47,11 @@ class Manifest:
     # told about every request once it has been answered — what the activity
     # log listens with. It can never change the response.
     request_observer: str | None = None
+    # Dotted path to `lock(user, company_id, subject) -> str | None`: why the
+    # data of a subject (`visit_id`, or `asset_group_id` + `order_id`) cannot
+    # be edited right now. Screens ask it to show the fields locked, with the
+    # reason, before the write guard would refuse the save.
+    edit_lock: str | None = None
     events_subscribed: tuple[str, ...] = ()
     events_published: tuple[str, ...] = ()
     provides_techniques: tuple[str, ...] = ()

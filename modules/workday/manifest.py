@@ -26,4 +26,5 @@ MANIFEST = Manifest(
     ),
     on_install="modules.workday.infrastructure.setup.install",
     write_guard="modules.workday.infrastructure.guard.guard",
+    edit_lock="modules.workday.infrastructure.guard.lock",
 )

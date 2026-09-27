@@ -12,7 +12,6 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
-from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -23,9 +22,7 @@ from modules.core.infrastructure.bus import bus
 from modules.core.infrastructure.transactions import tenant_atomic
 from modules.measurements.application.record_readings import ReadingInput, RecordReadings
 from modules.measurements.infrastructure.repositories import DjangoPointContextRepository
-from modules.security.application.access import build_actor
-from modules.security.domain.policies import can_record_reading
-from modules.services.infrastructure.visit_refs import visit_ref
+from modules.media.infrastructure.refs import image_ref
 from modules.thresholds.infrastructure.repositories import DjangoThresholdRepository
 from modules.ut_rollers.domain.rollers import (
     LABELS,
@@ -40,16 +37,10 @@ from modules.ut_rollers.domain.rollers import (
 )
 from modules.ut_rollers.infrastructure.readings import ReplacingReadingRepository
 from modules.ut_rollers.infrastructure.setup import KIND
+from modules.ut_rollers.interfaces.common import find_order, lock_of, require, rollers_of, visit_for
 from modules.ut_rollers.models import UTIndication
 
 MAX_ROLLERS = 200
-
-
-def _require(request, permission: str):
-    actor = build_actor(request.user, request.company_id)
-    if not actor.has(permission):
-        raise PermissionDenied(f"Falta el permiso {permission}")
-    return actor
 
 
 class RollerGroupsView(APIView):
@@ -58,20 +49,24 @@ class RollerGroupsView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def get(self, request):
-        actor = _require(request, "ut_rollers.view")
+        actor = require(request, "ut_rollers.view")
         from modules.assets.models import AssetGroup
 
         groups = AssetGroup.objects.for_company(request.company_id).filter(kind__code=KIND)
         if actor.area_ids is not None:
             groups = groups.filter(sector__area_id__in=actor.area_ids)
-        return Response([
-            {
-                "id": group.id,
-                "name": group.name,
-                "rollers": group.equipments.filter(equipment_type="roller", retired_at__isnull=True).count(),
-            }
-            for group in groups.order_by("name")
-        ])
+        return Response(
+            [
+                {
+                    "id": group.id,
+                    "name": group.name,
+                    "rollers": group.equipments.filter(
+                        equipment_type="roller", retired_at__isnull=True
+                    ).count(),
+                }
+                for group in groups.order_by("name")
+            ]
+        )
 
 
 class RollerCreateView(APIView):
@@ -86,7 +81,7 @@ class RollerCreateView(APIView):
 
     @tenant_atomic
     def post(self, request, group_id: int):
-        actor = _require(request, "ut_rollers.manage_rollers")
+        actor = require(request, "ut_rollers.manage_rollers")
         from modules.assets.models import AssetGroup, Equipment, MeasurementPoint
 
         group = (
@@ -115,22 +110,42 @@ class RollerCreateView(APIView):
         taken = set(Equipment.objects.for_company(request.company_id).values_list("asset_code", flat=True))
         for number in new:
             code = generate_code(
-                area_code=group.sector.area.code, equipment_type="roller", client_tag=None, taken=taken,
+                area_code=group.sector.area.code,
+                equipment_type="roller",
+                client_tag=None,
+                taken=taken,
             )
             taken.add(code)
             roller = Equipment.objects.create(
-                company_id=request.company_id, asset_group=group, asset_code=code,
-                client_tag=f"{group.name} {number}"[:60], name=f"POLÍN {number}",
-                equipment_type="roller", position_in_group="driven", group_component=component,
-                order_in_group=number, monitoring_frequency="on_demand", lubrication_type="none",
+                company_id=request.company_id,
+                asset_group=group,
+                asset_code=code,
+                client_tag=f"{group.name} {number}"[:60],
+                name=f"POLÍN {number}",
+                equipment_type="roller",
+                position_in_group="driven",
+                group_component=component,
+                order_in_group=number,
+                monitoring_frequency="on_demand",
+                lubrication_type="none",
             )
             for point in range(1, POINTS + 1):
                 MeasurementPoint.objects.create(
-                    company_id=request.company_id, equipment=roller, number=point, axis="N",
-                    side="custom", point_type="bearing", label=f"P{point}",
+                    company_id=request.company_id,
+                    equipment=roller,
+                    number=point,
+                    axis="N",
+                    side="custom",
+                    point_type="bearing",
+                    label=f"P{point}",
                 )
-        record(request, "ut_rollers.rollers_added", object_type="asset_group", object_id=group.id,
-               after={"numbers": new})
+        record(
+            request,
+            "ut_rollers.rollers_added",
+            object_type="asset_group",
+            object_id=group.id,
+            after={"numbers": new},
+        )
         return Response({"created": new, "skipped": sorted(existing & set(numbers))}, status=201)
 
 
@@ -140,8 +155,8 @@ class RollerSheetView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def get(self, request, order_id: int):
-        _require(request, "ut_rollers.view")
-        order = _order(request, order_id)
+        require(request, "ut_rollers.view")
+        order = find_order(request, order_id)
         group_id = request.query_params.get("group")
         if not group_id:
             raise ValidationError("Falta el parámetro 'group'")
@@ -149,16 +164,16 @@ class RollerSheetView(APIView):
 
     @tenant_atomic
     def post(self, request, order_id: int):
-        actor = _require(request, "ut_rollers.capture")
+        actor = require(request, "ut_rollers.capture")
         if not actor.has("measurements.add_reading"):
             raise PermissionDenied("Falta el permiso measurements.add_reading")
-        order = _order(request, order_id)
+        order = find_order(request, order_id)
         group_id = int(request.data.get("group") or 0)
         rows = request.data.get("rows") or []
         if not rows:
             raise ValidationError("No llegó ningún rodillo")
 
-        rollers = {row.id: row for row in _rollers(request, group_id)}
+        rollers = {row.id: row for row in rollers_of(request, group_id)}
         use_case = RecordReadings(
             readings_repo=ReplacingReadingRepository(),
             thresholds_repo=DjangoThresholdRepository(getattr(request, "language", "es")),
@@ -175,12 +190,15 @@ class RollerSheetView(APIView):
             observation = (row.get("observation") or "").strip()
             if not inaccessible and all(value is None for value in values) and not observation:
                 continue
-            visit = _visit_for(request, actor, order, roller)
+            visit = visit_for(request, actor, order, roller)
             points = {point.number: point.id for point in roller.points.all()}
             inputs = tuple(
                 ReadingInput(
-                    point_id=points[number], magnitude_code=MAGNITUDE,
-                    value=None if inaccessible else value, unit_code="mm", aggregation="min",
+                    point_id=points[number],
+                    magnitude_code=MAGNITUDE,
+                    value=None if inaccessible else value,
+                    unit_code="mm",
+                    aggregation="min",
                     quality="not_measured" if inaccessible or value is None else "ok",
                     not_measured_reason="no_access" if inaccessible else "",
                 )
@@ -189,16 +207,23 @@ class RollerSheetView(APIView):
             )
             if inputs:
                 use_case.execute(
-                    company_id=request.company_id, service_visit_id=visit.id,
-                    taken_at=visit.visited_at or datetime.now(UTC), inputs=inputs,
+                    company_id=request.company_id,
+                    service_visit_id=visit.id,
+                    taken_at=visit.visited_at or datetime.now(UTC),
+                    inputs=inputs,
                     operator_id=request.user.id,
                     standard_code=order.standard.code if order.standard_id else None,
                 )
             _save_observation(request, visit, observation)
             saved += 1
 
-        record(request, "reading.captured", object_type="service_order", object_id=order.id,
-               after={"technique": TECHNIQUE, "rollers": saved})
+        record(
+            request,
+            "reading.captured",
+            object_type="service_order",
+            object_id=order.id,
+            after={"technique": TECHNIQUE, "rollers": saved},
+        )
         return Response(_sheet(request, order, group_id), status=201)
 
 
@@ -210,7 +235,7 @@ class IndicationListView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def get(self, request):
-        _require(request, "ut_rollers.view")
+        require(request, "ut_rollers.view")
         rows = UTIndication.objects.for_company(request.company_id)
         if request.query_params.get("equipment"):
             rows = rows.filter(equipment_id=request.query_params["equipment"])
@@ -223,12 +248,14 @@ class IndicationListView(APIView):
         return Response([_indication(row) for row in rows.select_related("equipment")[:500]])
 
     def post(self, request):
-        actor = _require(request, "ut_rollers.capture")
+        actor = require(request, "ut_rollers.capture")
         from modules.assets.models import Equipment
 
-        roller = Equipment.objects.for_company(request.company_id).filter(
-            id=request.data.get("equipment"), equipment_type="roller"
-        ).first()
+        roller = (
+            Equipment.objects.for_company(request.company_id)
+            .filter(id=request.data.get("equipment"), equipment_type="roller")
+            .first()
+        )
         if roller is None:
             raise ValidationError("Ese rodillo no existe")
         kind = request.data.get("kind")
@@ -239,9 +266,14 @@ class IndicationListView(APIView):
             raise ValidationError("Lado desconocido: mando o transmisión")
         visit_id = request.data.get("service_visit") or None
         if request.data.get("service_order"):
-            visit_id = _visit_for(request, actor, _order(request, request.data["service_order"]), roller).id
+            visit_id = visit_for(
+                request, actor, find_order(request, request.data["service_order"]), roller
+            ).id
         row = UTIndication.objects.create(
-            company_id=request.company_id, equipment=roller, kind=kind, side=side,
+            company_id=request.company_id,
+            equipment=roller,
+            kind=kind,
+            side=side,
             service_visit_id=visit_id,
             length_mm=_decimal(request.data.get("length_mm")),
             depth_mm=_decimal(request.data.get("depth_mm")),
@@ -256,7 +288,7 @@ class IndicationDetailView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def patch(self, request, indication_id: int):
-        _require(request, "ut_rollers.capture")
+        require(request, "ut_rollers.capture")
         row = _find_indication(request, indication_id)
         if "kind" in request.data:
             if request.data["kind"] not in dict(UTIndication.KINDS):
@@ -272,80 +304,30 @@ class IndicationDetailView(APIView):
         return Response(_indication(row))
 
     def delete(self, request, indication_id: int):
-        _require(request, "ut_rollers.capture")
+        require(request, "ut_rollers.capture")
         row = _find_indication(request, indication_id)
         record(request, "ut_rollers.indication_deleted", object_type="ut_indication", object_id=row.id)
         row.delete()
         return Response(status=204)
 
 
-def _order(request, order_id: int):
-    from modules.services.models import ServiceOrder
-
-    order = (
-        ServiceOrder.objects.for_company(request.company_id)
-        .select_related("technique")
-        .filter(id=order_id)
-        .first()
-    )
-    if order is None:
-        raise ValidationError("Esa orden no existe")
-    if order.technique.code != TECHNIQUE:
-        raise ValidationError("Esa orden no es de UT en rodillos")
-    return order
-
-
-def _rollers(request, group_id: int):
-    from modules.assets.models import Equipment
-
-    actor = build_actor(request.user, request.company_id)
-    rows = (
-        Equipment.objects.for_company(request.company_id)
-        .filter(asset_group_id=group_id, equipment_type="roller", retired_at__isnull=True)
-        .select_related("asset_group__sector")
-        .prefetch_related("points")
-        .order_by("order_in_group", "id")
-    )
-    if actor.area_ids is not None:
-        rows = rows.filter(asset_group__sector__area_id__in=actor.area_ids)
-    return list(rows)
-
-
-def _visit_for(request, actor, order, roller):
-    from modules.services.models import ServiceVisit, VisitParticipant
-
-    visit = (
-        ServiceVisit.objects.for_company(request.company_id)
-        .filter(service_order=order, equipment=roller)
-        .select_related("equipment__asset_group__sector")
-        .prefetch_related("participants")
-        .order_by("-visited_at", "-id")
-        .first()
-    )
-    if visit is not None:
-        if not can_record_reading(actor, visit_ref(visit)):
-            raise PermissionDenied(f"No puedes registrar lecturas en {roller.name}")
-        return visit
-    if not actor.may_reach_area(roller.asset_group.sector.area_id):
-        raise PermissionDenied("Ese conjunto está fuera de tu alcance")
-    visit = ServiceVisit.objects.create(
-        company_id=request.company_id, service_order=order, equipment=roller,
-        visited_at=timezone.now(),
-    )
-    VisitParticipant.objects.create(visit=visit, user=request.user, role="lead_analyst")
-    return visit
-
-
 def _save_observation(request, visit, text: str) -> None:
     from modules.diagnostics.models import EquipmentLogEntry
 
-    entry = EquipmentLogEntry.objects.for_company(request.company_id).filter(
-        service_visit=visit, entry_type="observation"
-    ).order_by("id").first()
+    entry = (
+        EquipmentLogEntry.objects.for_company(request.company_id)
+        .filter(service_visit=visit, entry_type="observation")
+        .order_by("id")
+        .first()
+    )
     if entry is None and text:
         EquipmentLogEntry.objects.create(
-            company_id=request.company_id, equipment=visit.equipment, service_visit=visit,
-            entry_type="observation", entry_date=visit.visited_at.date(), text=text,
+            company_id=request.company_id,
+            equipment=visit.equipment,
+            service_visit=visit,
+            entry_type="observation",
+            entry_date=visit.visited_at.date(),
+            text=text,
             author=request.user,
         )
     elif entry is not None and entry.text != text:
@@ -361,7 +343,7 @@ def _sheet(request, order, group_id: int) -> dict:
     from modules.measurements.models import Reading
     from modules.services.models import ServiceVisit
 
-    rollers = _rollers(request, group_id)
+    rollers = rollers_of(request, group_id)
     visits = {
         visit.equipment_id: visit
         for visit in ServiceVisit.objects.for_company(request.company_id)
@@ -383,9 +365,11 @@ def _sheet(request, order, group_id: int) -> dict:
         .order_by("id")
     }
     indications: dict[int, int] = {}
-    for equipment_id in UTIndication.objects.for_company(request.company_id).filter(
-        equipment__in=rollers
-    ).values_list("equipment_id", flat=True):
+    for equipment_id in (
+        UTIndication.objects.for_company(request.company_id)
+        .filter(equipment__in=rollers)
+        .values_list("equipment_id", flat=True)
+    ):
         indications[equipment_id] = indications.get(equipment_id, 0) + 1
 
     rows = []
@@ -403,27 +387,34 @@ def _sheet(request, order, group_id: int) -> dict:
         )
         state = state_of(inaccessible=inaccessible, status_code=worst.code if worst else None)
         thinnest = headline(r.value for r in values if r is not None)
-        rows.append({
-            "equipment_id": roller.id,
-            "number": roller.order_in_group,
-            "name": roller.name,
-            "visit_id": visit.id if visit else None,
-            "is_closed": bool(visit and visit.is_closed),
-            "values": [None if r is None or r.value is None else str(r.value) for r in values],
-            "min": None if thinnest is None else str(thinnest),
-            "inaccessible": inaccessible,
-            "state": state,
-            "status": None if worst is None else {
-                "code": worst.code, "label": LABELS.get(worst.code, worst.name), "color": worst.color,
-            },
-            "observation": notes.get(visit.id, "") if visit else "",
-            "indications": indications.get(roller.id, 0),
-        })
+        rows.append(
+            {
+                "equipment_id": roller.id,
+                "number": roller.order_in_group,
+                "name": roller.name,
+                "visit_id": visit.id if visit else None,
+                "is_closed": bool(visit and visit.is_closed),
+                "values": [None if r is None or r.value is None else str(r.value) for r in values],
+                "min": None if thinnest is None else str(thinnest),
+                "inaccessible": inaccessible,
+                "state": state,
+                "status": None
+                if worst is None
+                else {
+                    "code": worst.code,
+                    "label": LABELS.get(worst.code, worst.name),
+                    "color": worst.color,
+                },
+                "observation": notes.get(visit.id, "") if visit else "",
+                "indications": indications.get(roller.id, 0),
+            }
+        )
     return {
         "order": {"id": order.id, "code": order.code},
         "group_id": group_id,
         "rows": rows,
         "summary": tally(row["state"] for row in rows),
+        "lock_reason": lock_of(request, order, group_id),
     }
 
 
@@ -452,8 +443,13 @@ def _ensure_plan_room(request, adding: int) -> None:
     from modules.licensing.application.license_service import PlanLimitReachedError, ensure_room
 
     try:
-        ensure_room(tenant.code, "equipment", equipment_in_plan(request.company_id),
-                    secret=settings.LICENSE_SECRET, adding=adding)
+        ensure_room(
+            tenant.code,
+            "equipment",
+            equipment_in_plan(request.company_id),
+            secret=settings.LICENSE_SECRET,
+            adding=adding,
+        )
     except PlanLimitReachedError as cause:
         record(request, "license.limit_reached", object_type="equipment", after={"adding": adding})
         raise ValidationError(str(cause)) from cause
@@ -467,10 +463,8 @@ def _find_indication(request, indication_id: int) -> UTIndication:
 
 
 def _indication(row: UTIndication) -> dict:
-    from modules.media.infrastructure.local_store import store
     from modules.media.infrastructure.models import MediaAsset
 
-    backend = store()
     photos = MediaAsset.objects.for_company(row.company_id).filter(
         owner_type="ut_indication", owner_id=row.id
     )
@@ -486,14 +480,5 @@ def _indication(row: UTIndication) -> dict:
         "position": row.position,
         "notes": row.notes,
         "created_at": row.created_at.isoformat(),
-        "photos": [
-            {
-                "id": photo.id,
-                "url": backend.url(photo.original_key),
-                "thumb_url": backend.url((photo.derivatives or {}).get("thumb", {}).get("key"))
-                if (photo.derivatives or {}).get("thumb") else None,
-                "caption": photo.caption,
-            }
-            for photo in photos
-        ],
+        "photos": [image_ref(photo) for photo in photos],
     }

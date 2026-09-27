@@ -18,6 +18,7 @@ from datetime import date
 
 from django.http import JsonResponse
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 from modules.core.infrastructure.module_gate import module_of
 from modules.workday.domain.rules import MANAGE, UNLOCKED_MODULES, day_closed
@@ -25,7 +26,14 @@ from modules.workday.infrastructure.jobs import allows
 
 # What a photo or a document may belong to and still be a picture of a train.
 # A service's own signatures are the workday module's, and never guarded.
-MEDIA_OWNERS = frozenset({"visit", "point", "equipment"})
+MEDIA_OWNERS = frozenset({"visit", "point", "equipment", "ut_indication"})
+
+
+NOT_STARTED = (
+    "El servicio de este conjunto no ha comenzado: faltan su ATS y las firmas de inicio del "
+    "ingeniero de producción, el líder del servicio y el supervisor de planta, o que un "
+    "administrador lo desbloquee."
+)
 
 
 def guard(request, view_func, view_kwargs):
@@ -33,36 +41,61 @@ def guard(request, view_func, view_kwargs):
     if module is None or module in UNLOCKED_MODULES:
         return None
     user, company_id = _identify(request)
-    if user is None or company_id is None:
-        return None
-
-    from modules.security.application.access import permissions_for
-
-    if MANAGE in permissions_for(user, company_id):
+    if user is None or company_id is None or _manages(user, company_id):
         return None
 
     today = timezone.localdate()
     if _closed(company_id, today):
-        return _locked(today)
-
+        return _refuse(423, "workday_closed", _closed_message(today))
     subject = _subject(request, module, view_func, view_kwargs)
-    if subject is None:
+    refusal = _refusal(company_id, subject) if subject else None
+    return _refuse(*refusal) if refusal else None
+
+
+def lock(user, company_id, subject: dict) -> str | None:
+    """The edit lock the screens show (manifest `edit_lock`): the same rule
+    the guard applies to the save, asked before anyone types."""
+    if user is None or company_id is None or _manages(user, company_id):
         return None
+    today = timezone.localdate()
+    if _closed(company_id, today):
+        return _closed_message(today)
+    if subject.get("visit_id"):
+        found = _of_visit(subject["visit_id"])
+    elif subject.get("asset_group_id"):
+        found = _of_group(subject["asset_group_id"])
+        if found and subject.get("order_id"):
+            found = (found[0], found[1], found[2], int(subject["order_id"]))
+    else:
+        found = None
+    refusal = _refusal(company_id, found) if found else None
+    return refusal[2] if refusal else None
+
+
+def _refusal(company_id: int, subject) -> tuple[int, str, str] | None:
+    """(status, type, message) when the day or the service keeps this train
+    shut: 423 once its day is closed, 428 while no service of it started."""
     day, plant_id, group_id, order_id = subject
+    today = timezone.localdate()
     if day is not None and day != today and _closed(company_id, day, plant_id):
-        return _locked(day)
+        return 423, "workday_closed", _closed_message(day)
     if group_id is not None and not allows(company_id, group_id, day or today, order_id):
-        return JsonResponse(
-            {
-                "detail": "El servicio de este conjunto no ha comenzado: faltan su ATS y las firmas "
-                "de inicio del ingeniero de producción, el líder del servicio y el supervisor "
-                "de planta, o que un administrador lo desbloquee.",
-                "type": "service_not_started",
-                "status": 428,
-            },
-            status=428,
-        )
+        return 428, "service_not_started", NOT_STARTED
     return None
+
+
+def _manages(user, company_id: int) -> bool:
+    from modules.security.application.access import permissions_for
+
+    return MANAGE in permissions_for(user, company_id)
+
+
+def _refuse(status: int, kind: str, message: str) -> JsonResponse:
+    return JsonResponse({"detail": message, "type": kind, "status": status}, status=status)
+
+
+def _closed_message(day: date) -> str:
+    return f"La jornada del {day:%d/%m/%Y} está cerrada: ya no se pueden modificar sus datos."
 
 
 def _identify(request):
@@ -117,6 +150,12 @@ def _subject(request, module, view_func, view_kwargs):
         if row:
             return row["shift_date"], row["asset_group__sector__area__plant_id"], row["asset_group_id"], None
         return None
+    if module == "maintenance" and view_name == "WorkRecordListView" and body.get("asset_group"):
+        # A correctivo's day is its start's, as the record files it.
+        subject = _of_group(body["asset_group"])
+        started = parse_datetime(str(body.get("started_at") or ""))
+        day = timezone.localtime(started).date() if started and timezone.is_aware(started) else None
+        return subject and (day, subject[1], subject[2], None)
     if module == "alignment":
         return _of_alignment(view_name, view_kwargs, body)
     if module == "topography":
@@ -129,6 +168,12 @@ def _subject(request, module, view_func, view_kwargs):
 def _of_owner(owner_type: str, owner_id: int):
     if owner_type == "visit":
         return _of_visit(owner_id)
+    if owner_type == "ut_indication":
+        from modules.ut_rollers.models import UTIndication
+
+        return _of_equipment(
+            UTIndication.objects.filter(id=owner_id).values_list("equipment_id", flat=True).first()
+        )
     from modules.assets.models import MeasurementPoint
 
     if owner_type == "point":
@@ -245,14 +290,3 @@ def _body(request) -> dict:
     except ValueError:
         return {}
     return body if isinstance(body, dict) else {}
-
-
-def _locked(day: date) -> JsonResponse:
-    return JsonResponse(
-        {
-            "detail": f"La jornada del {day:%d/%m/%Y} está cerrada: ya no se pueden modificar sus datos.",
-            "type": "workday_closed",
-            "status": 423,
-        },
-        status=423,
-    )

@@ -108,3 +108,18 @@ def test_a_generic_upload_says_what_the_file_belongs_to():
         owner=("equipment", "560"),
     )
     assert event.description == "Subió «crack.jpg» (equipo #560)"
+
+
+def test_qualifiers_name_the_resource_before_them():
+    assert describe_request(method="POST", path="/api/v1/areas/new/", status=201).description == "Creó área"
+    edited = describe_request(method="PATCH", path="/api/v1/equipments/7/edit/", status=200, fields=["name"])
+    assert edited.description == "Modificó equipo #7 · campos: name"
+
+
+def test_a_sub_resource_is_placed_under_the_nearest_record_with_an_id():
+    event = describe_request(
+        method="DELETE", path="/api/v1/topography-visits/7/survey/images/plan/", status=200
+    )
+    assert event.description == "Eliminó imagen «plan» de visita de topografía #7"
+    crew = describe_request(method="DELETE", path="/api/v1/workday-jobs/7/crew/3/", status=200)
+    assert crew.description == "Eliminó persona del ATS #3 de servicio #7"

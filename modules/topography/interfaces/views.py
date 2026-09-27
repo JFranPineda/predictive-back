@@ -23,6 +23,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from modules.media.infrastructure.refs import image_ref
 from modules.security.application.access import build_actor
 from modules.security.domain.policies import can_edit_visit
 from modules.services.infrastructure.visit_refs import visit_ref
@@ -289,20 +290,6 @@ def _store(request, kind: str, owner_type: str, owner_id: int):
     return asset
 
 
-def _image(asset) -> dict | None:
-    if asset is None:
-        return None
-    from modules.media.infrastructure.local_store import store
-
-    backend = store()
-    thumb = (asset.derivatives or {}).get("thumb", {}).get("key")
-    return {
-        "id": asset.id,
-        "url": backend.url(asset.original_key),
-        "thumb_url": backend.url(thumb) if thumb else None,
-    }
-
-
 def _survey_payload(survey: TopographySurvey | None, visit) -> dict:
     if survey is None:
         return {
@@ -323,8 +310,8 @@ def _survey_payload(survey: TopographySurvey | None, visit) -> dict:
         "service_visit_id": survey.service_visit_id,
         **{field: getattr(survey, field) for field in SURVEY_TEXT},
         "survey_date": survey.survey_date.isoformat() if survey.survey_date else None,
-        "schema_image": _image(survey.schema_image),
-        "plan_image": _image(survey.plan_image),
+        "schema_image": image_ref(survey.schema_image),
+        "plan_image": image_ref(survey.plan_image),
     }
 
 
@@ -335,7 +322,7 @@ def _payload(row: TopographyElementReading) -> dict:
         "element_label": row.element_label,
         "reference_label": row.reference_label,
         **{field: _plain(getattr(row, field)) for field in FIELDS},
-        "photos": {box: _image(getattr(row, f"{box}_photo")) for box in BOXES},
+        "photos": {box: image_ref(getattr(row, f"{box}_photo")) for box in BOXES},
         "observation": row.observation,
     }
 

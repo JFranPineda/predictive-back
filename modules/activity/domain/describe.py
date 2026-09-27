@@ -94,6 +94,21 @@ RESOURCES = {
     "users": "usuario",
     "work-records": "registro de mantenimiento",
     "workdays": "jornada",
+    "workday-jobs": "servicio",
+    "crew": "persona del ATS",
+    "topography-visits": "visita de topografía",
+    "survey": "levantamiento topográfico",
+    "images": "imagen",
+    "results": "resumen de resultados",
+    "report": "informe",
+    "others": "otra falla",
+    "operating": "datos operativos",
+    "operating-parameters": "parámetro operativo",
+    "access-code": "código de acceso",
+    "language": "idioma",
+    "matrix": "registro de valores",
+    "curve": "curva",
+    "ut-rollers": "UT en rodillos",
 }
 
 # A final segment that is a verb, not a resource: "POST …/workdays/3/close/".
@@ -154,7 +169,7 @@ OWNERS = {
 }
 
 # Resources whose id in the path is a code, not a number: "modules/workday/install".
-CODE_IDS = frozenset({"modules"})
+CODE_IDS = frozenset({"modules", "images", "photos"})
 
 REFUSALS = {
     400: "datos no válidos",
@@ -191,7 +206,7 @@ def describe_request(
     """None for what is not an event: reads, refreshes, the log's own posts."""
     method = method.upper()
     route = _route(path)
-    if route is None or method not in VERBS:
+    if not route or method not in VERBS:
         return None
     if route[:1] == ["activity"] or "/".join(route[:2]) == "auth/refresh":
         return None
@@ -277,11 +292,17 @@ def clean_client_events(raw: Iterable[dict], limit: int = 100) -> list[ClientEve
     return events
 
 
+# Path words that qualify the resource before them rather than name one:
+# "areas/new", "equipments/7/edit", "readings/bulk".
+QUALIFIERS = frozenset({"new", "edit", "bulk"})
+
+
 def _route(path: str) -> list[str] | None:
     marker = "/api/v1/"
     if marker not in path:
         return None
-    return [segment for segment in path.split(marker, 1)[1].split("/") if segment]
+    segments = [segment for segment in path.split(marker, 1)[1].split("/") if segment]
+    return [segment for segment in segments if segment not in QUALIFIERS]
 
 
 def _parse(route: list[str]) -> tuple[str, str, str, tuple[str, str] | None]:
@@ -298,7 +319,9 @@ def _parse(route: list[str]) -> tuple[str, str, str, tuple[str, str] | None]:
     if not pairs:
         return route[0], "", action, None
     resource, object_id = pairs[-1]
-    parent = pairs[-2] if len(pairs) > 1 and pairs[-2][1] else None
+    # The nearest resource above it that names an id: "images «plan»" of
+    # "visita de topografía #7", not of the "survey" in between.
+    parent = next((pair for pair in reversed(pairs[:-1]) if pair[1]), None)
     return resource, object_id, action, parent
 
 

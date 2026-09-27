@@ -157,6 +157,7 @@ def _payload(row: Magnitude, language: str) -> dict:
         "decimals": row.decimals,
         "display_order": row.display_order,
         "template_only": row.template_only,
+        "in_record": row.in_record,
         # Viscosity and dielectric strength get worse as they drop, unlike
         # every vibration magnitude.
         "higher_is_worse": row.higher_is_worse,
@@ -277,6 +278,8 @@ class MagnitudeDetailView(APIView):
             magnitude.display_order = max(int(request.data["display_order"] or 0), 0)
         if "template_only" in request.data:
             magnitude.template_only = bool(request.data["template_only"])
+        if "in_record" in request.data:
+            magnitude.in_record = bool(request.data["in_record"])
         magnitude.save()
         language = getattr(request, "language", "es")
         return Response({
@@ -289,6 +292,7 @@ class MagnitudeDetailView(APIView):
             "decimals": magnitude.decimals,
             "display_order": magnitude.display_order,
             "template_only": magnitude.template_only,
+            "in_record": magnitude.in_record,
         })
 
     def delete(self, request, magnitude_id: int):

@@ -308,7 +308,7 @@ class Command(BaseCommand):
         from modules.diagnostics.domain.catalogue import ALL_FAULTS
         from modules.measurements.domain.acceleration import ACCELERATION
         from modules.measurements.domain.families import family_for
-        from modules.measurements.domain.magnitude_order import display_order_for
+        from modules.measurements.domain.magnitude_order import display_order_for, in_record_by_default
         from modules.measurements.domain.thermography import IR_TMAX_SPEC
         from modules.thresholds.domain.defaults import ALL_STATUSES, PROFILES, STANDARDS, TRANSLATIONS
 
@@ -403,6 +403,7 @@ class Command(BaseCommand):
                 "default_aggregation": aggregation,
                 "decimals": decimals,
                 "display_order": display_order_for(code),
+                "in_record": in_record_by_default(code),
                 "translations": {"name": {"es": es, "en": en}},
                 "per_axis": code not in per_bearing,
                 "short_code": per_bearing.get(code, ""),

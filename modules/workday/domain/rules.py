@@ -53,6 +53,9 @@ IPERC_LEVELS = ("A", "M", "B")
 # signatures is the administrator's alone. Each is its own permission, so
 # Usuarios y permisos can hand it to whoever the company decides.
 REOPEN = "workday.reopen"
+# The codes predate Q17: they now register and read the services and their ATS.
+REGISTER = "workday.register_permit"
+VIEW_JOBS = "workday.view_permits"
 CLOSE_SERVICE = "workday.close_service"
 UNLOCK_SERVICE = "workday.unlock_service"
 

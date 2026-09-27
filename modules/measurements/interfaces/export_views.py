@@ -106,8 +106,11 @@ def _block(block: dict) -> ExportBlock:
                 # A blank column is a round that does not exist for this point;
                 # "--" is one that was not measured. The sheet has always
                 # distinguished them and so does the export.
+                # An open cell of a fixed table (no reading yet) is not a
+                # measurement that failed: it prints blank.
                 "missing": [
-                    "--" if cell and cell["value"] is None else "" for cell in row["cells"]
+                    "--" if cell and cell["value"] is None and cell["reading_id"] is not None else ""
+                    for cell in row["cells"]
                 ],
             }
             for row in block["rows"]

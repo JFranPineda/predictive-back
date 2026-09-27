@@ -21,9 +21,10 @@ from rest_framework.views import APIView
 
 from modules.core.infrastructure.audit import record
 from modules.core.infrastructure.transactions import tenant_atomic
+from modules.media.infrastructure.refs import image_ref
 from modules.ut_rollers.domain.rollers import SIDES
 from modules.ut_rollers.infrastructure.journals import MEASURES, journal_sides, results_of
-from modules.ut_rollers.interfaces.views import _order, _require, _rollers, _visit_for
+from modules.ut_rollers.interfaces.common import find_order, lock_of, require, rollers_of, visit_for
 from modules.ut_rollers.models import JournalInspection, RollerGroupReport
 
 ACCESS = dict(JournalInspection.ACCESS)
@@ -33,8 +34,8 @@ class JournalSheetView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def get(self, request, order_id: int):
-        _require(request, "ut_rollers.view")
-        order = _order(request, order_id)
+        require(request, "ut_rollers.view")
+        order = find_order(request, order_id)
         group_id = int(request.query_params.get("group") or 0)
         if not group_id:
             raise ValidationError("Falta el parámetro 'group'")
@@ -44,13 +45,13 @@ class JournalSheetView(APIView):
     def post(self, request, order_id: int):
         """`{"group", "side", "rows": [{equipment, diameter_mm, …, access,
         access_note, state_text}]}` — one side of one group at a time."""
-        actor = _require(request, "ut_rollers.capture")
-        order = _order(request, order_id)
+        actor = require(request, "ut_rollers.capture")
+        order = find_order(request, order_id)
         group_id = int(request.data.get("group") or 0)
         side = request.data.get("side")
         if side not in SIDES:
             raise ValidationError("Indica el lado: mando o transmisión")
-        rollers = {row.id: row for row in _rollers(request, group_id)}
+        rollers = {row.id: row for row in rollers_of(request, group_id)}
         saved = 0
         for item in request.data.get("rows") or []:
             roller = rollers.get(int(item.get("equipment") or 0))
@@ -59,7 +60,7 @@ class JournalSheetView(APIView):
             access = item.get("access") or "ok"
             if access not in ACCESS:
                 raise ValidationError("Acceso desconocido")
-            _visit_for(request, actor, order, roller)  # ownership and lock, like the thickness sheet
+            visit_for(request, actor, order, roller)  # ownership and lock, like the thickness sheet
             JournalInspection.objects.update_or_create(
                 company_id=request.company_id,
                 service_order=order,
@@ -91,8 +92,8 @@ class ResultsSummaryView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def get(self, request, order_id: int):
-        _require(request, "ut_rollers.view")
-        order = _order(request, order_id)
+        require(request, "ut_rollers.view")
+        order = find_order(request, order_id)
         return Response({"rows": results_of(request.company_id, order)})
 
 
@@ -100,24 +101,28 @@ class GroupReportView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def get(self, request, order_id: int, group_id: int):
-        _require(request, "ut_rollers.view")
-        order = _order(request, order_id)
+        require(request, "ut_rollers.view")
+        order = find_order(request, order_id)
         report = (
             RollerGroupReport.objects.for_company(request.company_id)
             .filter(service_order=order, asset_group_id=group_id)
             .first()
         )
-        return Response(_report_payload(report, order, group_id))
+        return Response(_report_payload(report, order, group_id, lock_of(request, order, group_id)))
 
     @tenant_atomic
     def patch(self, request, order_id: int, group_id: int):
-        _require(request, "ut_rollers.capture")
-        report = _report(request, _order(request, order_id), group_id)
+        require(request, "ut_rollers.capture")
+        report = _report(request, find_order(request, order_id), group_id)
         for field in ("conclusions", "recommendations"):
             if field in request.data:
                 setattr(report, field, (request.data.get(field) or "").strip())
         report.save()
-        return Response(_report_payload(report, report.service_order, group_id))
+        return Response(
+            _report_payload(
+                report, report.service_order, group_id, lock_of(request, report.service_order, group_id)
+            )
+        )
 
 
 class GroupReportImageView(APIView):
@@ -129,8 +134,8 @@ class GroupReportImageView(APIView):
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request, order_id: int, group_id: int):
-        _require(request, "ut_rollers.capture")
-        report = _report(request, _order(request, order_id), group_id)
+        require(request, "ut_rollers.capture")
+        report = _report(request, find_order(request, order_id), group_id)
         role = request.data.get("role")
         if role not in ("plan", "photo"):
             raise ValidationError("La imagen es el plano del conjunto o una foto del registro")
@@ -151,11 +156,16 @@ class GroupReportImageView(APIView):
         if role == "plan":
             report.plan_image = asset
             report.save(update_fields=["plan_image"])
-        return Response(_report_payload(report, report.service_order, group_id), status=201)
+        return Response(
+            _report_payload(
+                report, report.service_order, group_id, lock_of(request, report.service_order, group_id)
+            ),
+            status=201,
+        )
 
     def delete(self, request, order_id: int, group_id: int, asset_id: int):
-        _require(request, "ut_rollers.capture")
-        report = _report(request, _order(request, order_id), group_id)
+        require(request, "ut_rollers.capture")
+        report = _report(request, find_order(request, order_id), group_id)
         from modules.media.infrastructure.models import MediaAsset
 
         if report.plan_image_id == asset_id:
@@ -164,7 +174,11 @@ class GroupReportImageView(APIView):
         MediaAsset.objects.for_company(request.company_id).filter(
             owner_type="ut_group_report", owner_id=report.id, id=asset_id
         ).delete()
-        return Response(_report_payload(report, report.service_order, group_id))
+        return Response(
+            _report_payload(
+                report, report.service_order, group_id, lock_of(request, report.service_order, group_id)
+            )
+        )
 
 
 # ---------------------------------------------------------------- helpers
@@ -174,7 +188,8 @@ def _journals(request, order, group_id: int) -> dict:
     return {
         "order": {"id": order.id, "code": order.code},
         "group_id": group_id,
-        "sides": journal_sides(request.company_id, order, _rollers(request, group_id)),
+        "sides": journal_sides(request.company_id, order, rollers_of(request, group_id)),
+        "lock_reason": lock_of(request, order, group_id),
     }
 
 
@@ -204,8 +219,7 @@ def _report(request, order, group_id: int) -> RollerGroupReport:
     return report
 
 
-def _report_payload(report: RollerGroupReport | None, order, group_id: int) -> dict:
-    from modules.media.infrastructure.local_store import store
+def _report_payload(report: RollerGroupReport | None, order, group_id: int, lock: str | None = None) -> dict:
     from modules.media.infrastructure.models import MediaAsset
 
     if report is None:
@@ -217,18 +231,8 @@ def _report_payload(report: RollerGroupReport | None, order, group_id: int) -> d
             "recommendations": "",
             "plan": None,
             "photos": [],
+            "lock_reason": lock,
         }
-    backend = store()
-
-    def image(asset) -> dict:
-        thumb = (asset.derivatives or {}).get("thumb", {}).get("key")
-        return {
-            "id": asset.id,
-            "url": backend.url(asset.original_key),
-            "thumb_url": backend.url(thumb) if thumb else None,
-            "caption": asset.caption,
-        }
-
     photos = (
         MediaAsset.objects.for_company(report.company_id)
         .filter(owner_type="ut_group_report", owner_id=report.id, kind="photo")
@@ -240,6 +244,7 @@ def _report_payload(report: RollerGroupReport | None, order, group_id: int) -> d
         "group_id": group_id,
         "conclusions": report.conclusions,
         "recommendations": report.recommendations,
-        "plan": image(report.plan_image) if report.plan_image_id else None,
-        "photos": [image(asset) for asset in photos],
+        "plan": image_ref(report.plan_image) if report.plan_image_id else None,
+        "photos": [image_ref(asset) for asset in photos],
+        "lock_reason": lock,
     }

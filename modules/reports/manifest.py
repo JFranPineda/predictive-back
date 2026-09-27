@@ -13,8 +13,12 @@ MANIFEST = Manifest(
         ("reports.create", "Crear reportes"),
         ("reports.issue", "Emitir reportes al cliente"),
     ),
+    # Two entries, one per family of report: the predictive one (MPd, with its
+    # monthly summary and the correctivos) and the non-destructive one (END).
     menu=(
-        MenuItem(label="Informes MPd / END", route="/reports", icon="file-text", order=16, parent=None,
+        MenuItem(label="Informes MPd", route="/reports/mpd", icon="file-text", order=16, parent=None,
+                 permission="reports.view"),
+        MenuItem(label="Informes END", route="/reports/end", icon="file-text", order=17, parent=None,
                  permission="reports.view"),
     ),
 )
