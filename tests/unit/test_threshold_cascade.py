@@ -178,14 +178,15 @@ class TestEvaluation:
 class TestTechniqueProfiles:
     """Each technique has its own vocabulary (point 4 of the brief)."""
 
-    def test_vibration_and_ultrasound_share_the_same_four(self):
+    def test_vibration_and_ultrasound_share_the_same_states(self):
+        # Q16: "observación" sits between operativo and alarma.
         for technique in ("vibration", "ultrasound"):
             codes = [status.code for status in profile_for(technique).options]
-            assert codes == ["off", "operational", "alarm", "shutdown"]
+            assert codes == ["off", "operational", "observation", "alarm", "shutdown"]
 
     def test_thermography_leads_with_the_condition_states(self):
         codes = [status.code for status in profile_for("thermography").options]
-        assert codes == ["operational", "alarm", "shutdown", "off"]
+        assert codes == ["operational", "observation", "alarm", "shutdown", "off"]
 
     def test_maintenance_has_availability_states_and_no_alarm(self):
         profile = profile_for("maintenance")

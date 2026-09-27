@@ -20,6 +20,13 @@ from .entities import (
 OPERATIONAL = Status(
     code="operational", name="Operativo", kind=StatusKind.CONDITION, severity=10, color="#16a34a"
 )
+# Q16: a state of its own between operativo and alarma — no serious fault, but
+# it has to be watched. A machine built outside the standard (IPSA's Pulper
+# Nº 04) is judged by its own norma, and this is the state that norma uses.
+OBSERVATION = Status(
+    code="observation", name="Observación", kind=StatusKind.CONDITION, severity=15,
+    color="#0891b2",
+)
 ALARM = Status(
     code="alarm", name="Alarma", kind=StatusKind.CONDITION, severity=20, color="#f59e0b",
     requires_action=True,
@@ -48,19 +55,19 @@ RUNNING = Status(
 )
 
 ALL_STATUSES: tuple[Status, ...] = (
-    OPERATIONAL, ALARM, SHUTDOWN, OFF, OUT_OF_SERVICE, RETIRED, RUNNING,
+    OPERATIONAL, OBSERVATION, ALARM, SHUTDOWN, OFF, OUT_OF_SERVICE, RETIRED, RUNNING,
 )
 
 # --- profiles per technique -------------------------------------------------
 PROFILES: tuple[TechniqueStatusProfile, ...] = (
-    TechniqueStatusProfile("vibration", (OFF, OPERATIONAL, ALARM, SHUTDOWN)),
-    TechniqueStatusProfile("ultrasound", (OFF, OPERATIONAL, ALARM, SHUTDOWN)),
-    TechniqueStatusProfile("thermography", (OPERATIONAL, ALARM, SHUTDOWN, OFF)),
+    TechniqueStatusProfile("vibration", (OFF, OPERATIONAL, OBSERVATION, ALARM, SHUTDOWN)),
+    TechniqueStatusProfile("ultrasound", (OFF, OPERATIONAL, OBSERVATION, ALARM, SHUTDOWN)),
+    TechniqueStatusProfile("thermography", (OPERATIONAL, OBSERVATION, ALARM, SHUTDOWN, OFF)),
     # Maintenance reports availability plus a single "it works" condition; it
     # measures nothing, so it has no alarm band.
     TechniqueStatusProfile("maintenance", (OFF, RETIRED, OUT_OF_SERVICE, OPERATIONAL)),
     TechniqueStatusProfile("lubrication", (OFF, RETIRED, OUT_OF_SERVICE, OPERATIONAL)),
-    TechniqueStatusProfile("alignment", (OFF, OPERATIONAL, ALARM, SHUTDOWN)),
+    TechniqueStatusProfile("alignment", (OFF, OPERATIONAL, OBSERVATION, ALARM, SHUTDOWN)),
 )
 
 
@@ -68,6 +75,7 @@ PROFILES: tuple[TechniqueStatusProfile, ...] = (
 # status fills these from the UI; see core.domain.i18n.
 TRANSLATIONS: dict[str, dict[str, str]] = {
     "operational": {"es": "Operativo", "en": "Operational"},
+    "observation": {"es": "Observación", "en": "Under observation"},
     "alarm": {"es": "Alarma", "en": "Alarm"},
     "shutdown": {"es": "Parada", "en": "Shutdown"},
     "off": {"es": "Apagado", "en": "Off"},
