@@ -53,3 +53,19 @@ def test_the_trend_draws_one_line_per_point_and_steps_over_gaps():
 
 def test_a_trend_with_nothing_measured_draws_nothing():
     assert trend_svg(["13 nov"], [("1H", [None])]) == ""
+
+
+def test_a_plant_state_like_observacion_gets_its_own_column_where_counted():
+    # Q16: IPSA's OBSERVACIÓN sits between Operativo and Alarma.
+    from modules.reports.domain.pareto import columns, label_for
+
+    order = columns(["operational", "observation", "alarm", "alert", "shutdown"])
+    assert order == ("normal", "observation", "alarm", "alert", "shutdown", "off", "unevaluated")
+    tally = pareto([state_for("observation", visited=True, off=False), "normal"], order)
+    assert tally["observation"] == 1
+    assert shown_states([tally], order) == (
+        "normal", "observation", "alarm", "shutdown", "off", "unevaluated",
+    )
+    assert "observation" not in shown_states([pareto(["normal"], order)], order)
+    assert label_for("observation", {"observation": "Observación"}) == "OBSERVACIÓN"
+    assert label_for("alarm") == "ALARMA"

@@ -13,7 +13,7 @@ from datetime import date
 from django.utils import timezone
 from rest_framework.exceptions import NotFound, ValidationError
 
-from modules.reports.domain.pareto import LABELS, pareto, shown_states, state_for
+from modules.reports.domain.pareto import columns, label_for, pareto, shown_states, state_for
 from modules.reports.domain.trend_svg import PALETTE, trend_svg
 from modules.reports.infrastructure.images import embedded, logo
 
@@ -585,6 +585,13 @@ def build_monthly(request, plant_id: int, month: str) -> dict:
     for entry in entries:
         latest[(entry.equipment.asset_group_id, entry.entry_type)] = entry.text
 
+    from modules.thresholds.models import Status
+
+    conditions = list(
+        Status.objects.for_company(request.company_id).filter(kind="condition").order_by("severity", "id")
+    )
+    order = columns([status.code for status in conditions])
+    names = {status.code: status.translated("name", language) for status in conditions}
     codes = sorted(techniques)
     rows, per_technique = [], {code: [] for code in codes}
     for group_id, name in sorted(groups.items(), key=lambda item: item[1]):
@@ -595,14 +602,14 @@ def build_monthly(request, plant_id: int, month: str) -> dict:
                 cell["worst"].code if cell["worst"] else None, visited=True, off=cell["off"]
             )
             per_technique[code].append(state)
-            cells.append({"state": LABELS.get(state, "") if state else "—", "key": state or ""})
+            cells.append({"state": label_for(state, names) if state else "—", "key": state or ""})
         rows.append({
             "group": name,
             "cells": cells,
             "conclusion": latest.get((group_id, "conclusion"), ""),
             "recommendation": latest.get((group_id, "recommendation"), ""),
         })
-    tallies = {code: pareto(per_technique[code]) for code in codes}
+    tallies = {code: pareto(per_technique[code], order) for code in codes}
     return {
         "logo": logo(),
         "title": "Resumen mensual de condición",
@@ -611,8 +618,8 @@ def build_monthly(request, plant_id: int, month: str) -> dict:
         "rows": rows,
         "pareto": [
             {"technique": techniques[code],
-             "counts": [{"state": LABELS[state], "key": state, "count": tallies[code][state]}
-                        for state in shown_states(tallies.values())]}
+             "counts": [{"state": label_for(state, names), "key": state, "count": tallies[code][state]}
+                        for state in shown_states(tallies.values(), order)]}
             for code in codes
         ],
         "filename": f"resumen-{plant.code}-{month}",

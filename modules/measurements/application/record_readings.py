@@ -13,7 +13,7 @@ from decimal import Decimal
 from modules.core.domain.events import ReadingRecorded
 from modules.core.domain.ports import EventPublisher
 from modules.thresholds.domain.entities import Aggregation, EvaluationContext
-from modules.thresholds.domain.services import classify_context, evaluate, resolve
+from modules.thresholds.domain.services import classify_context, evaluate, resolve, standard_for
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +109,7 @@ class RecordReadings:
 
             return Evaluation(status=None, threshold_set_id=None, unmatched=True)
         candidates = self._thresholds.candidates(company_id, item.magnitude_code)
+        own_standard = bool(getattr(point_context, "own_standard", False))
         context = EvaluationContext(
             magnitude_code=item.magnitude_code,
             aggregation=Aggregation(item.aggregation),
@@ -120,7 +121,10 @@ class RecordReadings:
             # Without the standard every set is out of play and the reading
             # comes back ungraded; without the plate the class cannot be
             # derived for the machines nobody classified by hand.
-            standard_code=standard_code or getattr(point_context, "standard_code", None),
+            standard_code=standard_for(
+                standard_code, getattr(point_context, "standard_code", None), own=own_standard
+            ),
+            own_standard=own_standard,
             rated_power_kw=getattr(point_context, "rated_power_kw", None),
             mounting=getattr(point_context, "mounting", None),
         )

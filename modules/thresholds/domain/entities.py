@@ -233,6 +233,10 @@ class EvaluationContext:
     # The standard assigned to this equipment. Sets from any other standard are
     # out of play; custom sets (no standard) still compete.
     standard_code: str | None = None
+    # Q16: a machine built outside the standard (IPSA's Pulper Nº 04) is judged
+    # by its own norma only — a report's norma does not replace it, and
+    # hand-written sets without a norma are out of play too.
+    own_standard: bool = False
 
     def ref_for(self, scope: Scope) -> int | str | None:
         return {

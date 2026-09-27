@@ -352,3 +352,33 @@ class TestClassifyFillsTheContext:
     def test_without_a_standard_nothing_is_guessed(self):
         context = ctx(rated_power_kw=45)
         assert classify_context(context, None).machine_class is None
+
+
+class TestOwnStandard:
+    """Q16: IPSA's Pulper Nº 04 was built to order in Peru and does not follow
+    ISO 20816-3; it is judged by its own norma, whatever the report cites."""
+
+    PULPER = make_set(20, Scope.GLOBAL, None, "10", "30", standard_code="pulper_04")
+    BOOK = make_set(21, Scope.EQUIPMENT, 1, "10", "13", rationale="límite genérico del libro")
+    ISO_GLOBAL = make_set(22, Scope.GLOBAL, None, "3.5", "6.1", standard_code="iso_20816_3")
+
+    def test_its_own_norma_wins_over_the_book_override_and_the_report_norma(self):
+        from modules.thresholds.domain.services import standard_for as norma_for
+
+        code = norma_for("iso_20816_3", "pulper_04", own=True)
+        context = ctx(equipment_id=1, standard_code=code, own_standard=True)
+        assert resolve((self.PULPER, self.BOOK, self.ISO_GLOBAL), context, date(2026, 1, 1)) is self.PULPER
+
+    def test_without_it_the_report_norma_and_the_override_behave_as_before(self):
+        from modules.thresholds.domain.services import standard_for as norma_for
+
+        code = norma_for("iso_20816_3", "pulper_04", own=False)
+        assert code == "iso_20816_3"
+        context = ctx(equipment_id=1, standard_code=code)
+        assert resolve((self.PULPER, self.BOOK, self.ISO_GLOBAL), context, date(2026, 1, 1)) is self.BOOK
+
+    def test_keeping_it_without_a_norma_changes_nothing(self):
+        from modules.thresholds.domain.services import standard_for as norma_for
+
+        assert norma_for("iso_20816_3", None, own=True) == "iso_20816_3"
+        assert norma_for(None, "iso_10816_3", own=False) == "iso_10816_3"

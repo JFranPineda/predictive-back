@@ -297,6 +297,7 @@ class EquipmentCollectionView(AssetAdminView):
             ),
             applied_standard_id=request.data.get("applied_standard") or None,
             machine_class_id=request.data.get("machine_class") or None,
+            keeps_own_standard=bool(request.data.get("keeps_own_standard")),
         )
 
         # Points are what readings hang off; an equipment without them cannot
@@ -311,6 +312,53 @@ class EquipmentCollectionView(AssetAdminView):
         }, status=201)
 
 
+def _regrade(equipment) -> int:
+    """Its norma changed (Q16): its readings say what they are under the one
+    it is judged by now, each with its own report's norma."""
+    from modules.core.infrastructure.routing import installed_codes
+
+    if not {"thresholds", "measurements"} <= installed_codes():
+        return 0
+    from modules.measurements.models import Reading
+    from modules.thresholds.infrastructure.regrade import regrade
+
+    readings = Reading.objects.filter(point__equipment=equipment).select_related(
+        "magnitude", "point__equipment__asset_group__kind", "point__equipment__applied_standard",
+        "point__equipment__machine_class", "point__equipment__nameplate",
+        "service_visit__service_order__standard",
+    )
+    by_order: dict[int | None, list] = {}
+    for reading in readings:
+        by_order.setdefault(reading.service_visit.service_order_id if reading.service_visit_id else None,
+                            []).append(reading)
+    changed = 0
+    for rows in by_order.values():
+        order = rows[0].service_visit.service_order if rows[0].service_visit_id else None
+        changed += regrade(rows, standard=order.standard if order else None)
+    _settle(equipment)
+    return changed
+
+
+def _settle(equipment) -> None:
+    """The machine's own status is its last round's worst verdict."""
+    from modules.measurements.models import Reading
+
+    latest = (
+        Reading.objects.filter(point__equipment=equipment, value__isnull=False)
+        .order_by("-taken_at").values_list("service_visit_id", flat=True).first()
+    )
+    if latest is None:
+        return
+    worst = (
+        Reading.objects.filter(
+            service_visit_id=latest, point__equipment=equipment, condition_status__isnull=False
+        )
+        .select_related("condition_status").order_by("-condition_status__severity").first()
+    )
+    equipment.condition_status = worst.condition_status if worst else None
+    equipment.save(update_fields=["condition_status"])
+
+
 class EquipmentDetailView(AssetAdminView):
     def patch(self, request, equipment_id: int):
         self.require(request)
@@ -319,17 +367,30 @@ class EquipmentDetailView(AssetAdminView):
                       "monitoring_frequency", "lubrication_type"):
             if field in request.data:
                 setattr(equipment, field, (request.data.get(field) or "").strip())
+        judged_by = (
+            equipment.applied_standard_id, equipment.keeps_own_standard, equipment.machine_class_id
+        )
         if "applied_standard" in request.data:
             equipment.applied_standard_id = request.data["applied_standard"] or None
         if "machine_class" in request.data:
             equipment.machine_class_id = request.data["machine_class"] or None
+        if "keeps_own_standard" in request.data:
+            equipment.keeps_own_standard = bool(request.data["keeps_own_standard"])
         if request.data.get("reactivate") and equipment.retired_at:
             # Bringing a machine back takes a slot like creating one.
             _check_licence(request, "equipment", equipment_in_plan(request.company_id))
             equipment.retired_at = None
             equipment.availability_status = None
         equipment.save()
-        return Response({"id": equipment.id, "name": equipment.name})
+        regraded = 0
+        now = (equipment.applied_standard_id, equipment.keeps_own_standard, equipment.machine_class_id)
+        if judged_by != now:
+            regraded = _regrade(equipment)
+            record(request, "equipment.standard_changed", object_type="equipment", object_id=equipment.id,
+                   before={"standard": judged_by[0], "own": judged_by[1]},
+                   after={"standard": equipment.applied_standard_id, "own": equipment.keeps_own_standard,
+                          "regraded": regraded})
+        return Response({"id": equipment.id, "name": equipment.name, "regraded": regraded})
 
     def delete(self, request, equipment_id: int):
         """A machine with points is retired, never destroyed: its history stays

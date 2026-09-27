@@ -172,6 +172,18 @@ ALERT = {
     "translations": {"name": {"es": "Alerta", "en": "Alert"}},
 }
 
+# Q16: OBSERVACIÓN is a state of its own, between Operativo and Alarma — "no
+# serious fault, keep watching it". IPSA wrote it for the Pulper Nº 04, built
+# to order in Peru outside ISO 20816-3: its shutdown sits higher than the
+# standard's, so its book is judged by a norma of its own.
+OBSERVATION = {
+    "code": "observation",
+    "name": "Observación",
+    "severity": 15,
+    "color": "#0891b2",
+    "translations": {"name": {"es": "Observación", "en": "Under observation"}},
+}
+
 INSTRUMENTS = {
     "vibration": ("skf_cmxa80", "SKF Microlog CMXA 80", "SKF"),
     "thermography": ("flir_e4", "Cámara termográfica E4", "FLIR"),
@@ -217,6 +229,7 @@ class Command(BaseCommand):
         machines = {book.number: self._train(company, plant, book, trains, catalogue) for book in books}
         self._limits(company, books, machines, catalogue)
         rounds = self._rounds(company, plant, books, machines, catalogue, people)
+        self._regrade_own()
         self._diary(company, books, machines, rounds, trains, people)
         if not options["no_images"]:
             self._images(company, paths, books, machines, rounds, people)
@@ -680,6 +693,7 @@ class Command(BaseCommand):
                 + (f" · {standards[standard].name}" if standard else " · envolvente en Gs pico"),
             )
         self._thermal_norma(company, catalogue)
+        self._own_normas(company, books, machines, catalogue)
 
         for book in books:
             for limit in book.limits:
@@ -809,6 +823,120 @@ class Command(BaseCommand):
             rationale__startswith="Escala térmica de IPSA",
             is_active=True,
         ).update(is_active=False)
+
+    def _own_normas(self, company, books, machines, catalogue) -> None:
+        """Q16: a book IPSA headed OBSERVACIÓN is a machine outside ISO
+        20816-3. It gets a norma of its own, kept whatever norma a report
+        cites. Its starting scale is only what the book tells: under the
+        book's alarm limit Operativo, above it Observación. The client sets
+        its own alarm and shutdown limits in Normas."""
+        statuses = catalogue["statuses"]
+        observation = self._get(
+            Status,
+            "estados",
+            company=company,
+            code=OBSERVATION["code"],
+            defaults={
+                "name": OBSERVATION["name"],
+                "kind": "condition",
+                "severity": OBSERVATION["severity"],
+                "color": OBSERVATION["color"],
+                "requires_action": False,
+                "measurable": True,
+                "translations": OBSERVATION["translations"],
+            },
+        )
+        statuses[OBSERVATION["code"]] = observation
+        vibration = catalogue["techniques"]["vibration"]
+        profile = TechniqueStatusProfile.objects.filter(company=company, technique=vibration).first()
+        if profile is not None and not profile.options.filter(status=observation).exists():
+            ladder = ("operational", "observation", "alarm", "alert", "shutdown")
+            for option in profile.options.select_related("status"):
+                code = option.status.code
+                option.order = ladder.index(code) if code in ladder else len(ladder) + option.order
+                option.save(update_fields=["order"])
+            TechniqueStatusOption.objects.create(
+                profile=profile, status=observation, order=ladder.index("observation")
+            )
+
+        self.own_equipment = []
+        for book in books:
+            if book.header_state != "observation":
+                continue
+            items = [item for item, _ in machines[book.number]["machines"].values()]
+            if not items:
+                continue
+            name = f"{machines[book.number]['group'].name} · criterio propio"
+            norma = self._get(
+                ThresholdStandard,
+                "normas",
+                company=company,
+                code=f"propio_{book.number}",
+                defaults={
+                    "name": name,
+                    "source": f"Equipo fuera de ISO 20816-3 ({book.filename})",
+                    "description": (
+                        "Equipo fabricado a medida: su parada está por encima de la norma ISO. "
+                        "Valores de partida tomados del libro; fijar alarma y parada."
+                    ),
+                    "translations": {"name": {"es": name}},
+                },
+            )
+            norma.techniques.add(vibration)
+            if not ThresholdSet.objects.filter(standard=norma).exists():
+                for magnitude, aggregation, unit in (("vel_rms", "rms", "mm/s"), ("env_accel", "peak", "gE")):
+                    row = ThresholdSet.objects.create(
+                        company=company, magnitude_code=magnitude, aggregation=aggregation, unit_code=unit,
+                        scope="global", scope_ref_id=None, standard=norma, machine_class=None,
+                        valid_from=datetime(2024, 1, 1).date(),
+                        rationale=(
+                            f"Valores de partida del {book.filename}: bajo el límite de alarma del libro, "
+                            "Operativo; por encima, Observación, como lo calificó IPSA. Falta que el "
+                            "cliente fije sus límites de alarma y parada."
+                        ),
+                    )
+                    low = self._book_alarm(book, magnitude)
+                    ThresholdBand.objects.bulk_create([
+                        ThresholdBand(threshold_set=row, status=statuses["operational"], min_value=None,
+                                      max_value=low, order=0),
+                        ThresholdBand(threshold_set=row, status=observation, min_value=low,
+                                      max_value=None, order=1),
+                    ])
+                    self.made["umbrales"] += 1
+            for item in items:
+                if item.applied_standard_id != norma.id or not item.keeps_own_standard:
+                    item.applied_standard = norma
+                    item.keeps_own_standard = True
+                    item.save(update_fields=["applied_standard", "keeps_own_standard"])
+                self.own_equipment.append(item.id)
+            self.notes.append(
+                f"{book.filename}: equipo fuera de ISO 20816-3, calificado con su norma «{name}» "
+                "(Operativo / Observación; alarma y parada las fija el cliente en Normas)"
+            )
+
+    @staticmethod
+    def _book_alarm(book, magnitude) -> Decimal:
+        """The book's own alarm limit for this magnitude, or the plant's."""
+        for limit in book.limits:
+            found = limit_of(limit.label)
+            if found and found[0] == magnitude and found[1] != "technical_associates":
+                return limit.normal
+        return next(low for (code, _), (low, _) in DEFAULT_LIMITS.items() if code == magnitude)
+
+    def _regrade_own(self) -> None:
+        """Readings of a machine with its own norma, graded by it — the rounds
+        of an earlier import were graded before the norma existed."""
+        from modules.thresholds.infrastructure.regrade import regrade
+
+        if not getattr(self, "own_equipment", None):
+            return
+        readings = Reading.objects.filter(point__equipment_id__in=self.own_equipment).select_related(
+            "magnitude", "point__equipment__asset_group__kind", "point__equipment__applied_standard",
+            "point__equipment__machine_class", "point__equipment__nameplate",
+        )
+        changed = regrade(readings)
+        if changed:
+            self.notes.append(f"{changed} lecturas recalificadas con la norma propia de su equipo")
 
     def _set(
         self, company, statuses, magnitude, aggregation, unit, scope, ref, standard, low, high, rationale
@@ -1233,7 +1361,7 @@ class Command(BaseCommand):
             system = (
                 "off"
                 if column.state == "off"
-                else {10: "normal", 20: "alarm", 30: "shutdown"}.get(
+                else {10: "normal", 15: "observation", 20: "alarm", 30: "shutdown"}.get(
                     worst, "no_access" if column.state == "no_access" else None
                 )
             )
@@ -1326,11 +1454,6 @@ class Command(BaseCommand):
         lines += ["", "## Lo que no se pudo mapear tal cual", ""]
         for book in books:
             lines += [f"- {book.filename}: {warning}" for warning in dict.fromkeys(book.warnings)]
-            if book.header_state == "observation":
-                lines.append(
-                    f"- {book.filename}: estado OBSERVACIÓN en la cabecera; pendiente de que el cliente "
-                    "diga a qué estado corresponde."
-                )
             if "no opera" in plain_text((trains.get(book.number) or {}).get("recommendation", "")):
                 lines.append(
                     f"- {book.filename}: el resumen dice que el equipo ya no opera; queda APAGADO, "
@@ -1366,7 +1489,7 @@ def _n(value: Decimal) -> str:
     return format(value.normalize(), "f")
 
 
-RANK = {"normal": 1, "observation": 1, "alarm": 2, "shutdown": 3}
+RANK = {"normal": 1, "observation": 1.5, "alarm": 2, "shutdown": 3}
 
 
 def _explain(differences, trains, label, tallies, last_days, pareto) -> list[str]:
@@ -1409,8 +1532,8 @@ def _explain(differences, trains, label, tallies, last_days, pareto) -> list[str
         )
     if observed:
         lines.append(
-            f"- OBSERVACIÓN ({names(observed)}) no existe en el sistema: se califica por sus valores. "
-            "Queda pendiente que el cliente diga a qué estado corresponde."
+            f"- OBSERVACIÓN ({names(observed)}): equipo fuera de ISO 20816-3, calificado con su norma "
+            "propia (Q16). El resumen del cliente lo cuenta con el criterio ISO."
         )
     rounds = "; ".join(
         f"{title}: {sum(counts.values())} conjuntos" for title, counts in pareto.items() if title != "ESTADO"

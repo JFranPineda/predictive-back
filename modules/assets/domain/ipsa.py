@@ -16,8 +16,8 @@ from datetime import date
 from decimal import Decimal
 
 # The column's verdict, as written. SIN ACCESO is "not measured" with a
-# reason; APAGADO is availability. OBSERVACIÓN has no counterpart yet (the
-# client has not said where it sits), so it travels as itself.
+# reason; APAGADO is availability. OBSERVACIÓN is a state of its own between
+# Operativo and Alarma (Q16).
 STATES = {
     "NORMAL": "normal",
     "ACEPTABLE": "normal",
@@ -29,7 +29,9 @@ STATES = {
     "APAGADO": "off",
     "SIN ACCESO": "no_access",
 }
-CONDITION_OF = {"normal": "operational", "alarm": "alarm", "shutdown": "shutdown"}
+CONDITION_OF = {
+    "normal": "operational", "observation": "observation", "alarm": "alarm", "shutdown": "shutdown",
+}
 
 MONTHS = {
     "ENE": 1,

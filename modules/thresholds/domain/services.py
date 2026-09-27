@@ -151,8 +151,19 @@ def _scope_matches(candidate: ThresholdSet, context: EvaluationContext) -> bool:
 
 
 def _standard_matches(candidate: ThresholdSet, context: EvaluationContext) -> bool:
+    # A machine with its own norma competes only with that norma's sets.
+    if context.own_standard:
+        return candidate.standard_code == context.standard_code
     # A set with no standard is a hand-written criterion and always competes;
     # that is what an equipment override is.
     if candidate.standard_code is None:
         return True
     return candidate.standard_code == context.standard_code
+
+
+def standard_for(report: str | None, equipment: str | None, *, own: bool) -> str | None:
+    """The norma a reading is judged by: the equipment's own when it keeps
+    one (Q16), otherwise the report's (Q9), otherwise the equipment's."""
+    if own and equipment:
+        return equipment
+    return report or equipment

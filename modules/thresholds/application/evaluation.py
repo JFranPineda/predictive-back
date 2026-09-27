@@ -19,7 +19,10 @@ def context_for(equipment, magnitude_code: str, aggregation: str, point_id: int 
     wins over the one the machine carries, so one client can have a report
     judged by norma A and another by norma B."""
     plate = getattr(equipment, "nameplate", None)
-    standard = standard or equipment.applied_standard
+    # Q16: a machine that keeps its own norma is judged by it, whatever the
+    # report cites.
+    own = bool(getattr(equipment, "keeps_own_standard", False) and equipment.applied_standard_id)
+    standard = equipment.applied_standard if own else (standard or equipment.applied_standard)
 
     context = EvaluationContext(
         magnitude_code=magnitude_code,
@@ -30,6 +33,7 @@ def context_for(equipment, magnitude_code: str, aggregation: str, point_id: int 
         asset_group_kind=equipment.asset_group.kind.code if equipment.asset_group.kind_id else None,
         machine_class=equipment.machine_class.code if equipment.machine_class_id else None,
         standard_code=standard.code if standard else None,
+        own_standard=own,
         rated_power_kw=float(plate.rated_power_kw)
         if plate and plate.rated_power_kw is not None
         else None,

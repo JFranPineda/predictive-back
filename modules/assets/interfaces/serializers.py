@@ -42,6 +42,7 @@ class EquipmentSerializer(serializers.ModelSerializer):
     asset_group = serializers.SerializerMethodField()
     condition_status = serializers.SerializerMethodField()
     availability_status = serializers.SerializerMethodField()
+    applied_standard = serializers.SerializerMethodField()
 
     class Meta:
         model = Equipment
@@ -49,7 +50,12 @@ class EquipmentSerializer(serializers.ModelSerializer):
             "id", "asset_code", "client_tag", "name", "equipment_type",
             "monitoring_frequency", "lubrication_type", "area", "asset_group",
             "condition_status", "availability_status", "condition_updated_at",
+            "applied_standard", "keeps_own_standard",
         ]
+
+    def get_applied_standard(self, obj):
+        standard = obj.applied_standard
+        return {"id": standard.id, "code": standard.code, "name": standard.name} if standard else None
 
     def get_area(self, obj):
         area = obj.asset_group.sector.area

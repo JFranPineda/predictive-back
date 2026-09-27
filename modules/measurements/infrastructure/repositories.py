@@ -31,6 +31,8 @@ class PointContext:
     standard_code: str | None = None
     rated_power_kw: float | None = None
     mounting: str | None = None
+    # The equipment keeps its own norma, whatever the report cites (Q16).
+    own_standard: bool = False
 
 
 class DjangoPointContextRepository:
@@ -74,6 +76,9 @@ class DjangoPointContextRepository:
                 ),
                 rated_power_kw=_plate(row.equipment, "rated_power_kw"),
                 mounting=_plate(row.equipment, "mounting"),
+                own_standard=(
+                    row.equipment.keeps_own_standard and row.equipment.applied_standard_id is not None
+                ),
             )
             for row in rows
         }

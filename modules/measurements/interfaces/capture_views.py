@@ -134,7 +134,12 @@ def _decimal(value) -> Decimal | None:
 
 
 def _worst(recorded) -> str | None:
-    """The verdict the round produced, for the audit line a manager scans."""
-    rank = {"operational": 1, "alarm": 2, "shutdown": 3}
-    codes = [row.condition_status for row in recorded if row.condition_status]
-    return max(codes, key=lambda code: rank.get(code, 0)) if codes else None
+    """The verdict the round produced, for the audit line a manager scans —
+    by severity, so a plant's own states (OBSERVACIÓN, ALERTA) rank too."""
+    from modules.thresholds.models import Status
+
+    codes = {row.condition_status for row in recorded if row.condition_status}
+    if not codes:
+        return None
+    rank = dict(Status.objects.filter(code__in=codes).values_list("code", "severity"))
+    return max(codes, key=lambda code: rank.get(code, 0))

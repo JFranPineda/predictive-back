@@ -187,6 +187,10 @@ class Equipment(TenantModel):
         "thresholds.MachineClass", on_delete=models.PROTECT, null=True, blank=True,
         related_name="equipments",
     )
+    # Q16: a machine built outside the standard (IPSA's Pulper Nº 04, made to
+    # order in Peru) is judged by its own norma only, whatever norma the
+    # report cites.
+    keeps_own_standard = models.BooleanField(default=False)
     monitoring_frequency = models.CharField(
         max_length=20, choices=MONITORING_FREQUENCIES, default="monthly"
     )
