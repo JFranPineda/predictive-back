@@ -13,6 +13,9 @@ from modules.ut_rollers.domain.rollers import (
     DEFAULT_BANDS,
     LABELS,
     MAGNITUDE,
+    NORMA_CODE,
+    NORMA_NAME,
+    NORMA_SOURCE,
     POINTS,
     TECHNIQUE,
 )
@@ -54,6 +57,7 @@ def install() -> None:
     for company in Company.objects.all():
         _profile(company, technique)
         _limits(company)
+        _norma(company, technique)
         _kind(company)
 
 
@@ -100,6 +104,23 @@ def _limits(company) -> None:
             threshold_set=threshold_set, status=statuses[band.status_code],
             min_value=band.min_value, max_value=band.max_value, order=order,
         )
+
+
+def _norma(company, technique) -> None:
+    """Q15: the thickness scale is a norma of UT, so Normas shows it and edits
+    it band by band — from A to B, state W — and an order can name it or
+    another UT norma. The company's existing global scale becomes its scale."""
+    from modules.thresholds.models import ThresholdSet, ThresholdStandard
+
+    norma, _ = ThresholdStandard.objects.get_or_create(
+        company=company, code=NORMA_CODE,
+        defaults={"name": NORMA_NAME, "source": NORMA_SOURCE, "is_builtin": True,
+                  "translations": {"name": {"es": NORMA_NAME}}},
+    )
+    norma.techniques.add(technique)
+    ThresholdSet.objects.for_company(company.id).filter(
+        magnitude_code=MAGNITUDE, scope="global", standard__isnull=True, machine_class__isnull=True
+    ).update(standard=norma)
 
 
 def _kind(company) -> None:

@@ -3,8 +3,11 @@ from modules.core.domain.manifest import Manifest, MenuItem
 MANIFEST = Manifest(
     code="ut_rollers",
     name="END · UT en rodillos",
-    version="0.1.0",
-    summary="Seis espesores por rodillo, veredicto sobre el mínimo, incidencias y resumen por estado",
+    version="0.2.0",
+    summary=(
+        "Espesores por rodillo con estados según la norma, muñones de prensas por lado, "
+        "resumen de resultados, conclusiones, planos y registro fotográfico por conjunto"
+    ),
     category="Ensayos no destructivos",
     depends=("core", "assets", "thresholds", "measurements", "services", "security", "media", "diagnostics"),
     auto_install=True,

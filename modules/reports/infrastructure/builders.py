@@ -472,6 +472,7 @@ def build_end(request, order_id: int) -> dict:
         "conclusions": [_entry(row) for row in conclusions],
         "photos": [row for row in photos if row["src"]],
         "indications": _indications(request, [v.equipment_id for v in visits]),
+        "rollers": _roller_sections(request, order),
         "filename": f"informe-end-{order.code}"[:120],
     }
 
@@ -500,6 +501,26 @@ def _indications(request, equipment_ids: list[int]) -> list[dict]:
             "photo": embedded(photo),
         })
     return rows
+
+
+def _roller_sections(request, order) -> dict | None:
+    """Q15: the results summary and, per group, its plan, journals,
+    conclusions, recommendations and photos — when UT on rollers is on."""
+    from modules.core.infrastructure.routing import installed_codes
+
+    if "ut_rollers" not in installed_codes():
+        return None
+    from modules.ut_rollers.infrastructure.journals import report_sections
+
+    sections = report_sections(request.company_id, order)
+    for group in sections["groups"]:
+        group["plan"] = embedded(group["plan"]) if group["plan"] else None
+        group["photos"] = [
+            {"src": embedded(asset), "caption": asset.caption} for asset in group["photos"][:MAX_PHOTOS]
+        ]
+    if not sections["groups"] and not any(row["items"] for row in sections["results"]):
+        return None
+    return sections
 
 
 # --------------------------------------------------------------------------

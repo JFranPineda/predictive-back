@@ -31,7 +31,9 @@ from modules.ut_rollers.domain.rollers import (
     LABELS,
     MAGNITUDE,
     POINTS,
+    SIDES,
     TECHNIQUE,
+    describe_indication,
     headline,
     state_of,
     tally,
@@ -201,7 +203,9 @@ class RollerSheetView(APIView):
 
 
 class IndicationListView(APIView):
-    """`GET ut-rollers/indications/?equipment=<id>`, `POST` a new one."""
+    """`GET ut-rollers/indications/?equipment=<id>&order=<id>&side=`, `POST`
+    a new one. A journal finding (Q15) names its side and its order; it is
+    filed under that order's visit of the roller."""
 
     permission_classes = (IsAuthenticated,)
 
@@ -212,10 +216,14 @@ class IndicationListView(APIView):
             rows = rows.filter(equipment_id=request.query_params["equipment"])
         if request.query_params.get("group"):
             rows = rows.filter(equipment__asset_group_id=request.query_params["group"])
+        if request.query_params.get("order"):
+            rows = rows.filter(service_visit__service_order_id=request.query_params["order"])
+        if request.query_params.get("side"):
+            rows = rows.filter(side=request.query_params["side"])
         return Response([_indication(row) for row in rows.select_related("equipment")[:500]])
 
     def post(self, request):
-        _require(request, "ut_rollers.capture")
+        actor = _require(request, "ut_rollers.capture")
         from modules.assets.models import Equipment
 
         roller = Equipment.objects.for_company(request.company_id).filter(
@@ -226,9 +234,15 @@ class IndicationListView(APIView):
         kind = request.data.get("kind")
         if kind not in dict(UTIndication.KINDS):
             raise ValidationError("Tipo de incidencia desconocido")
+        side = request.data.get("side") or ""
+        if side and side not in SIDES:
+            raise ValidationError("Lado desconocido: mando o transmisión")
+        visit_id = request.data.get("service_visit") or None
+        if request.data.get("service_order"):
+            visit_id = _visit_for(request, actor, _order(request, request.data["service_order"]), roller).id
         row = UTIndication.objects.create(
-            company_id=request.company_id, equipment=roller, kind=kind,
-            service_visit_id=request.data.get("service_visit") or None,
+            company_id=request.company_id, equipment=roller, kind=kind, side=side,
+            service_visit_id=visit_id,
             length_mm=_decimal(request.data.get("length_mm")),
             depth_mm=_decimal(request.data.get("depth_mm")),
             position=(request.data.get("position") or "").strip(),
@@ -465,6 +479,8 @@ def _indication(row: UTIndication) -> dict:
         "equipment_id": row.equipment_id,
         "service_visit_id": row.service_visit_id,
         "kind": row.kind,
+        "side": row.side,
+        "description": describe_indication(row.kind, row.length_mm, row.depth_mm, row.notes),
         "length_mm": None if row.length_mm is None else str(row.length_mm),
         "depth_mm": None if row.depth_mm is None else str(row.depth_mm),
         "position": row.position,

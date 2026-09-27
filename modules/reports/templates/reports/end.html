@@ -36,6 +36,33 @@
 <div class="grid">{% for row in indications %}{% if row.photo %}<figure><img src="{{ row.photo }}" alt=""><figcaption>{{ row.element }} · {{ row.kind }}</figcaption></figure>{% endif %}{% endfor %}</div>
 {% endif %}
 
+{% if rollers %}
+{% if rollers.results %}
+<h2>Resumen de resultados</h2>
+<table>
+  <tr><th>Conjunto</th><th>Lado</th><th>Incidencia</th><th>Descripción</th><th class="num">Polín</th></tr>
+  {% for row in rollers.results %}
+  {% if row.items %}{% for item in row.items %}<tr><td>{% if forloop.first %}{{ row.group }}{% endif %}</td><td>{% if forloop.first %}{{ row.side_label }}{% endif %}</td><td>{{ item.kind }}</td><td>{{ item.description }}</td><td class="num">{{ item.roller|default:"—" }}</td></tr>{% endfor %}
+  {% else %}<tr><td>{{ row.group }}</td><td>{{ row.side_label }}</td><td>-</td><td>-</td><td class="num">-</td></tr>{% endif %}
+  {% endfor %}
+</table>
+{% endif %}
+{% for group in rollers.groups %}
+<h2>{{ group.name }}</h2>
+{% if group.plan %}<figure><img src="{{ group.plan }}" alt="" style="max-width: 100%"><figcaption>Plano del conjunto</figcaption></figure>{% endif %}
+{% for journal in group.journals %}
+<h3>{{ group.name }} · {{ journal.side }}</h3>
+<table>
+  <tr><th class="num">Rollo</th><th class="num">Diámetro (mm)</th><th class="num">Longitud externa (mm)</th><th class="num">Longitud total (mm)</th><th>Estado</th></tr>
+  {% for row in journal.rows %}<tr><td class="num">{{ row.number }}</td><td class="num">{{ row.diameter_mm|default:"-" }}</td><td class="num">{{ row.external_length_mm|default:"-" }}</td><td class="num">{{ row.total_length_mm|default:"-" }}</td><td>{{ row.state }}</td></tr>{% endfor %}
+</table>
+{% endfor %}
+{% if group.conclusions %}<p><strong>Conclusiones.</strong> {{ group.conclusions|linebreaksbr }}</p>{% endif %}
+{% if group.recommendations %}<p><strong>Recomendaciones.</strong> {{ group.recommendations|linebreaksbr }}</p>{% endif %}
+{% if group.photos %}<div class="grid">{% for row in group.photos %}{% if row.src %}<figure><img src="{{ row.src }}" alt=""><figcaption>{{ row.caption }}</figcaption></figure>{% endif %}{% endfor %}</div>{% endif %}
+{% endfor %}
+{% endif %}
+
 <h2>Conclusiones</h2>
 {% if conclusions %}<ul class="lines">{% for row in conclusions %}<li><strong>{{ row.type }}</strong> · {{ row.text }} <span class="muted">— {{ row.author }}, {{ row.date }}</span></li>{% endfor %}</ul>
 {% else %}<p class="empty">Sin conclusiones registradas.</p>{% endif %}

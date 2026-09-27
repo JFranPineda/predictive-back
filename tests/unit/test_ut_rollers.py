@@ -15,8 +15,7 @@ from modules.ut_rollers.domain.rollers import (
 )
 
 ORDER = Path(__file__).resolve().parents[3] / "predictive-docs/docs/v2/ORDEN_14778(1).xlsx"
-VERDICT = {"ACEPTABLE": "acceptable", "MEDIO": "medium", "INACCESIBLE": "inaccessible",
-           "CRÍTICO": "critical"}
+VERDICT = {"ACEPTABLE": "acceptable", "MEDIO": "medium", "INACCESIBLE": "inaccessible", "CRÍTICO": "critical"}
 
 
 def judge(thinnest: Decimal) -> str | None:
@@ -43,7 +42,10 @@ def test_inaccessible_is_a_state_not_a_value():
     # AC-03
     assert state_of(inaccessible=True, status_code=None) == "inaccessible"
     assert tally(["inaccessible", "acceptable"]) == {
-        "acceptable": 1, "medium": 0, "inaccessible": 1, "critical": 0,
+        "acceptable": 1,
+        "medium": 0,
+        "inaccessible": 1,
+        "critical": 0,
     }
 
 
@@ -73,3 +75,63 @@ def test_order_14778_comes_back_as_65_acceptable_and_14_medium():
         states.append(state)
 
     assert tally(states) == {"acceptable": 65, "medium": 14, "inaccessible": 0, "critical": 0}
+
+
+# Q15: the press rollers' journals, as the client's report tables print them.
+
+from modules.ut_rollers.domain.rollers import (  # noqa: E402
+    NO_FINDING,
+    Finding,
+    describe_indication,
+    journal_state,
+    results_summary,
+)
+
+
+def test_a_finding_reads_as_the_summary_writes_it():
+    assert describe_indication("crack", Decimal("219.8"), Decimal("12.0")) == (
+        "Fisura a 219.8 mm de longitud, profundidad 12.0 mm"
+    )
+    assert (
+        describe_indication("undercut", Decimal("281.7"), Decimal("3")) == "Socavación de 3.0 mm a 281.7 mm"
+    )
+    assert describe_indication("other", None, None, "Corrosión superficial") == "Corrosión superficial"
+
+
+def test_the_state_column_follows_access_and_findings():
+    assert journal_state("ok", "", []) == NO_FINDING
+    assert journal_state("covered", "", []) == "Tapado (Sin acceso)"
+    assert journal_state(
+        "no_access", "Sin acceso por inicio de operaciones del árbol de transmisión.", []
+    ) == ("Sin acceso por inicio de operaciones del árbol de transmisión.")
+    assert journal_state("ok", "", ["Fisura a 219.8 mm de longitud, profundidad 12.0 mm"]) == (
+        "Presenta fisura a 219.8 mm de longitud, profundidad 12.0 mm."
+    )
+
+
+def test_the_results_summary_lists_every_side_with_its_findings_or_a_dash():
+    rows = results_summary(
+        ["PRIMERA PRENSA", "SEGUNDA PRENSA"],
+        [
+            Finding(
+                "SEGUNDA PRENSA", "drive", "crack", "Fisura a 342.0 mm de longitud, profundidad 10.0 mm", 13
+            ),
+            Finding("SEGUNDA PRENSA", "drive", "undercut", "Socavación de 3 mm a 281.7 mm", 3),
+            Finding(
+                "SEGUNDA PRENSA",
+                "transmission",
+                "crack",
+                "Fisura a 346.1 mm de longitud, profundidad 11.0 mm",
+                12,
+            ),
+        ],
+    )
+    assert [(r["group"], r["side"], len(r["items"])) for r in rows] == [
+        ("PRIMERA PRENSA", "drive", 0),
+        ("PRIMERA PRENSA", "transmission", 0),
+        ("SEGUNDA PRENSA", "drive", 2),
+        ("SEGUNDA PRENSA", "transmission", 1),
+    ]
+    # In roller order, as the client's table reads.
+    assert [item["roller"] for item in rows[2]["items"]] == [3, 13]
+    assert rows[2]["items"][0]["kind"] == "Socavación"
