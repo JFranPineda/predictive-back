@@ -13,6 +13,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from modules.core.infrastructure.discovery import discover_manifests
 from modules.core.infrastructure.transactions import tenant_atomic
 from modules.security.application.access import build_actor
 from modules.security.domain.actor import Role as RoleEnum
@@ -53,6 +54,7 @@ class RoleListView(RoleAdminView):
     def get(self, request):
         language = getattr(request, "language", "es")
         del language
+        names = {manifest.code: manifest.name for manifest in discover_manifests()}
         roles = self.scoped(request).prefetch_related("permissions").order_by("name")
         modules: dict[str, list[dict]] = {}
         for permission in Permission.objects.filter(is_active=True).order_by("code"):
@@ -77,7 +79,8 @@ class RoleListView(RoleAdminView):
                 for role in roles
             ],
             "modules": [
-                {"code": code, "permissions": permissions}
+                # The module's own name, so a new module needs no entry here.
+                {"code": code, "name": names.get(code, code), "permissions": permissions}
                 for code, permissions in sorted(modules.items())
             ],
         })

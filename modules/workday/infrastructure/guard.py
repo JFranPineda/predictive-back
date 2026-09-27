@@ -276,10 +276,13 @@ def _of_rollers(view_name, view_kwargs, body):
     if view_name == "IndicationListView" and body.get("equipment"):
         return _of_equipment(body["equipment"])
     group_id = view_kwargs.get("group_id") or body.get("group")
-    if "order_id" in view_kwargs and group_id:
-        subject = _of_group(group_id)
-        return subject and (subject[0], subject[1], subject[2], int(view_kwargs["order_id"]))
-    return None
+    if not group_id:
+        return None
+    subject = _of_group(group_id)
+    # The train's rollers are catalogued from a route without an order: the
+    # service of that train still has to have started.
+    order_id = view_kwargs.get("order_id")
+    return subject and (subject[0], subject[1], subject[2], int(order_id) if order_id else None)
 
 
 def _body(request) -> dict:

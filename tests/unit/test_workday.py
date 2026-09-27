@@ -142,3 +142,15 @@ def test_the_module_is_optional_and_declares_its_guard():
 
 def test_a_manifest_without_a_guard_vetoes_nothing():
     assert Manifest(code="x", name="x", version="1").write_guard is None
+
+
+def test_a_roller_catalogued_without_an_order_still_belongs_to_its_train(monkeypatch):
+    """Rodillos are added from `groups/<id>/rollers/`, a route with no order:
+    the train is still the subject, or the service could be filled before it
+    started."""
+    from modules.workday.infrastructure import guard
+
+    monkeypatch.setattr(guard, "_of_group", lambda group_id: (None, 1, int(group_id), None))
+    assert guard._of_rollers("RollerCreateView", {"group_id": 7}, {}) == (None, 1, 7, None)
+    assert guard._of_rollers("JournalSheetView", {"group_id": 7, "order_id": 3}, {}) == (None, 1, 7, 3)
+    assert guard._of_rollers("RollerGroupsView", {}, {}) is None
