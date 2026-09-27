@@ -28,6 +28,15 @@ class MediaAsset(TenantModel):
         ("alignment_observation", "Alineamiento · observación"),
         # The plan a topography record reads its element numbers from (V3-18).
         ("topography_plan", "Plano de topografía"),
+        # The single result screen an SKF aligner prints, before and after in
+        # one image (Q10); other aligners give one screen per phase.
+        ("alignment_result", "Alineamiento · resultado"),
+        # Q11: the train's schema, and the photo behind each of the four
+        # measurement boxes of a roller (two of parallelism, two of level).
+        ("topography_schema", "Esquema del conjunto (topografía)"),
+        ("topography_box", "Topografía · cuadro de medida"),
+        # A signature drawn on the screen: a service's start, its crew (Q19).
+        ("signature", "Firma"),
     ]
     STATES = [
         ("pending", "Pendiente"), ("uploading", "Subiendo"), ("processing", "Procesando"),

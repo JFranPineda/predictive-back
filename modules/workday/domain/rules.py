@@ -4,8 +4,8 @@ Three rules, all enforced on the server:
 
 - once every workday opened for a date is closed, technicians change nothing
   of that date (F3-03);
-- nobody photographs or writes an observation about a train without a signed
-  ATS for that train in that day's open workday (F3-04);
+- nobody fills anything about a train until a service for it has started in
+  that day's open workday: its ATS and the three start signatures (Q17, Q19);
 - a field observation carries its photo, and whether the finding is visible
   in it, before its text (F3-05).
 
@@ -37,18 +37,152 @@ def day_closed(open_flags: Iterable[bool]) -> bool:
     return bool(flags) and not any(flags)
 
 
+# Q19: the three who sign a service's start, in the order the form asks.
+START_ROLES = ("production_engineer", "service_leader", "plant_supervisor")
+ROLE_LABELS = {
+    "production_engineer": "Ingeniero de producción",
+    "service_leader": "Líder encargado del servicio",
+    "plant_supervisor": "Supervisor de planta",
+    "crew": "Personal ejecutor",
+}
+RISK_CATEGORIES = ("high", "medium", "low")
+IPERC_LEVELS = ("A", "M", "B")
+
+# Q18: reopening a closed day and closing a service are the chief engineer's
+# (and the administrator's); unlocking a service without its start
+# signatures is the administrator's alone. Each is its own permission, so
+# Usuarios y permisos can hand it to whoever the company decides.
+REOPEN = "workday.reopen"
+CLOSE_SERVICE = "workday.close_service"
+UNLOCK_SERVICE = "workday.unlock_service"
+
+
 @dataclass(frozen=True, slots=True)
-class PermitRef:
+class JobRef:
+    """What the guard needs to know about one service of the day."""
+
     asset_group_id: int
-    has_document: bool
+    service_order_id: int | None
+    started: bool
+    closed: bool
 
 
-def permit_valid(permits: Iterable[PermitRef], asset_group_id: int, *, workday_open: bool) -> bool:
-    """An ATS counts once its signed copy is attached, and only while its
-    workday is open — the permit is for that day's work, not for the train."""
-    if not workday_open:
-        return False
-    return any(p.asset_group_id == asset_group_id and p.has_document for p in permits)
+def job_started(signed_roles: Iterable[str], *, unlocked: bool) -> bool:
+    """A service starts once its three start signatures are in, or once an
+    administrator unlocks it without them (Q19)."""
+    return unlocked or set(START_ROLES) <= set(signed_roles)
+
+
+def job_allows(jobs: Iterable[JobRef], asset_group_id: int, service_order_id: int | None = None) -> bool:
+    """Whether today's services let someone fill data of this train: one
+    started and not yet closed, for this train and — when both name one —
+    this same order."""
+    return any(
+        job.asset_group_id == asset_group_id
+        and job.started
+        and not job.closed
+        and (
+            job.service_order_id is None
+            or service_order_id is None
+            or job.service_order_id == service_order_id
+        )
+        for job in jobs
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class Step:
+    """One row of the ATS table: a step of the activity, one of its hazards,
+    the risk it carries, its IPERC evaluation and the controls."""
+
+    step: str
+    hazard: str
+    risk: str
+    level: str
+    score: int | None
+    controls: str
+
+
+@dataclass(frozen=True, slots=True)
+class CrewMember:
+    name: str
+    signed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class Ats:
+    activity: str
+    holder: str
+    area: str
+    zone: str
+    risk_category: str
+    ppe: str
+    tools: str
+    steps: tuple[Step, ...]
+    crew: tuple[CrewMember, ...]
+
+
+def ats_missing(ats: Ats) -> list[str]:
+    """What still keeps the ATS from being complete and signed, in the order
+    the form reads (Q19: the service closes only with all of it)."""
+    missing = []
+    for field, label in (
+        ("activity", "el nombre de la actividad"),
+        ("holder", "el titular de la actividad"),
+        ("area", "el área"),
+        ("zone", "la zona"),
+    ):
+        if not getattr(ats, field).strip():
+            missing.append(label)
+    if ats.risk_category not in RISK_CATEGORIES:
+        missing.append("la categoría del riesgo")
+    if not ats.ppe.strip():
+        missing.append("el EPP")
+    if not ats.tools.strip():
+        missing.append("los equipos y herramientas")
+    if not ats.steps:
+        missing.append("al menos un paso de la actividad")
+    for number, step in enumerate(ats.steps, start=1):
+        if not (step.step.strip() and step.hazard.strip() and step.risk.strip() and step.controls.strip()):
+            missing.append(f"el paso {number} completo (paso, peligro, riesgo y controles)")
+        elif step.level not in IPERC_LEVELS:
+            missing.append(f"la evaluación IPERC del paso {number}")
+    if not ats.crew:
+        missing.append("el personal ejecutor")
+    unsigned = [member.name for member in ats.crew if not member.signed]
+    if unsigned:
+        missing.append("la firma de " + ", ".join(unsigned))
+    return missing
+
+
+class ServiceNotClosableError(ValueError):
+    pass
+
+
+def check_closable(*, started: bool, closed: bool, missing: list[str]) -> None:
+    """Q19: the final hour is signed only over a started service whose ATS is
+    complete and signed by everyone on it."""
+    if closed:
+        raise ServiceNotClosableError("El servicio ya está cerrado")
+    if not started:
+        raise ServiceNotClosableError("El servicio no tiene sus firmas de inicio")
+    if missing:
+        raise ServiceNotClosableError("Falta en el ATS: " + "; ".join(missing))
+
+
+def items_of(steps: Iterable[Step]) -> list[int]:
+    """The ATS numbers a step once, however many hazards it lists: rows that
+    repeat the step above share its item number."""
+    numbers: list[int] = []
+    previous = None
+    for step in steps:
+        key = step.step.strip().lower()
+        if numbers and key == previous:
+            numbers.append(numbers[-1])
+        else:
+            numbers.append((numbers[-1] if numbers else 0) + 1)
+        previous = key
+    return numbers
 
 
 class ObservationIncompleteError(ValueError):

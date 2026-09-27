@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from django.utils import timezone
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
-from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -15,13 +15,13 @@ from modules.core.infrastructure.transactions import tenant_atomic
 from modules.security.application.access import build_actor
 from modules.workday.domain.rules import (
     MANAGE,
+    REOPEN,
     ObservationIncompleteError,
-    PermitRef,
     check_observation,
-    permit_valid,
 )
 from modules.workday.infrastructure.day_works import works_of
-from modules.workday.models import FieldObservation, SafetyPermit, Workday
+from modules.workday.infrastructure.jobs import allows
+from modules.workday.models import FieldObservation, Workday
 
 
 class WorkdayListView(APIView):
@@ -65,14 +65,17 @@ class WorkdayDetailView(APIView):
     def get(self, request, workday_id: int):
         actor = _require(request, "workday.view")
         row = _workday(request, workday_id)
+        from modules.workday.interfaces.job_views import job_summary
+
         sees_permits = any(
             actor.has(code) for code in (MANAGE, "workday.view_permits", "workday.register_permit")
         )
         return Response({
             **_summary(row),
             "works": [_work(work) for work in works_of(row)],
-            "permits": (
-                [_permit(p) for p in row.permits.select_related("asset_group", "document", "created_by")]
+            "jobs": (
+                [job_summary(job) for job in row.jobs.select_related(
+                    "asset_group", "service_order__technique", "closed_by").prefetch_related("signatures")]
                 if sees_permits else None
             ),
             "observations": [
@@ -106,13 +109,14 @@ class WorkdayCloseView(APIView):
 
 class WorkdayReopenView(APIView):
     """Reopening lifts the lock for everyone, so it is signed and leaves the
-    reason in the audit log (the first question of 10-phase-3.md)."""
+    reason in the audit log. Its own permission (Q18): the chief engineer and
+    the administrators hold it, and Usuarios y permisos decides who else."""
 
     permission_classes = (IsAuthenticated,)
 
     @tenant_atomic
     def post(self, request, workday_id: int):
-        _require(request, MANAGE)
+        _require(request, REOPEN)
         _reauthenticate(request)
         reason = (request.data.get("reason") or "").strip()
         if not reason:
@@ -129,36 +133,9 @@ class WorkdayReopenView(APIView):
         return Response(_summary(row))
 
 
-class PermitCollectionView(APIView):
-    """F3-04: an ATS number and its signed copy, in one request — a permit
-    without the copy would unlock nothing anyway."""
-
-    permission_classes = (IsAuthenticated,)
-    parser_classes = (MultiPartParser, FormParser, JSONParser)
-
-    @tenant_atomic
-    def post(self, request, workday_id: int):
-        actor = _require_any(request, (MANAGE, "workday.register_permit"))
-        row = _open_workday(request, workday_id)
-        group = _group(request, row)
-        number = (request.data.get("number") or "").strip()
-        if not number:
-            raise ValidationError("Escribe el número de ATS")
-        permit = SafetyPermit.objects.create(
-            company_id=request.company_id, workday=row, asset_group=group, number=number,
-            created_by=request.user,
-        )
-        permit.document = _store(request, "file", "document", "safety_permit", permit.id,
-                                 f"ATS {number}", missing="Sube el ATS firmado")
-        permit.save(update_fields=["document"])
-        record(request, "workday.permit_registered", object_type="safety_permit", object_id=permit.id,
-               after={"number": number, "asset_group": group.id, "by": actor.user_id})
-        return Response(_permit(permit), status=201)
-
-
 class ObservationCollectionView(APIView):
-    """F3-05, behind F3-04: the photo first, whether the finding shows in it,
-    then the text — and all of it only with the train's ATS in place."""
+    """F3-05: the photo first, whether the finding shows in it, then the text
+    — and all of it only once a service of the train has started (Q19)."""
 
     permission_classes = (IsAuthenticated,)
     parser_classes = (MultiPartParser, FormParser)
@@ -168,10 +145,10 @@ class ObservationCollectionView(APIView):
         actor = _require_any(request, (MANAGE, "workday.register_permit"))
         row = _open_workday(request, workday_id)
         group = _group(request, row)
-        if not actor.has(MANAGE):
-            permits = [PermitRef(p.asset_group_id, p.document_id is not None) for p in row.permits.all()]
-            if not permit_valid(permits, group.id, workday_open=row.is_open):
-                raise ValidationError("Sin ATS vigente para este conjunto: regístralo antes de observarlo")
+        if not actor.has(MANAGE) and not allows(request.company_id, group.id, row.date):
+            raise ValidationError(
+                "El servicio de este conjunto no ha comenzado: faltan su ATS y las firmas de inicio"
+            )
         visible = _visible(request.data.get("visible"))
         text = (request.data.get("text") or "").strip()
         try:
@@ -306,18 +283,6 @@ def _work(work) -> dict:
         "group": work.group, "equipment": work.equipment, "people": list(work.people),
         "started_at": work.started_at.isoformat() if work.started_at else None,
         "ended_at": work.ended_at.isoformat() if work.ended_at else None,
-    }
-
-
-def _permit(permit: SafetyPermit) -> dict:
-    return {
-        "id": permit.id,
-        "number": permit.number,
-        "asset_group": {"id": permit.asset_group_id, "name": permit.asset_group.name},
-        "document_url": _url(permit.document),
-        "valid": permit.document_id is not None,
-        "created_by": _name(permit.created_by),
-        "created_at": permit.created_at.isoformat(),
     }
 
 

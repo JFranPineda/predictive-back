@@ -20,6 +20,20 @@ SAFETY_CHIEF = {
     ),
 }
 
+# Q18: the chief engineer opens, closes and reopens the day and signs the
+# close of each service. Created with what the company's engineer already
+# holds, plus the day's permissions; Usuarios y permisos edits it after.
+CHIEF_ENGINEER = {
+    "code": "ingeniero_jefe",
+    "name": "Ingeniero jefe",
+    "base_role": "engineer",
+    "description": "Abre, cierra y reabre la jornada y firma con su clave el cierre de cada servicio.",
+    "permissions": (
+        "workday.view", "workday.view_permits", "workday.manage", "workday.reopen",
+        "workday.close_service", "workday.register_permit",
+    ),
+}
+
 # By the behaviour a role borrows, not its name: companies name them freely.
 GRANTS = {
     "technician": ("workday.view", "workday.register_permit"),
@@ -27,6 +41,11 @@ GRANTS = {
     "engineer": ("workday.view", "workday.view_permits"),
     "planner": ("workday.view", "workday.view_permits"),
 }
+
+
+# Q18: who opens and closes the day also reopens it and closes its services.
+# Handed out only to a role holding none of them yet, like GRANTS.
+WITH_MANAGE = ("workday.reopen", "workday.close_service")
 
 
 def install() -> None:
@@ -42,6 +61,21 @@ def install() -> None:
         )
         if created:
             role.permissions.set([permissions[c] for c in SAFETY_CHIEF["permissions"] if c in permissions])
+
+        chief, created = Role.objects.get_or_create(
+            company=company, code=CHIEF_ENGINEER["code"],
+            defaults={"name": CHIEF_ENGINEER["name"], "base_role": CHIEF_ENGINEER["base_role"],
+                      "description": CHIEF_ENGINEER["description"]},
+        )
+        if created:
+            engineer = Role.objects.filter(company=company, code="engineer").first()
+            if engineer is not None:
+                chief.permissions.set(engineer.permissions.all())
+            chief.permissions.add(*[permissions[c] for c in CHIEF_ENGINEER["permissions"] if c in permissions])
+
+        for row in Role.objects.filter(company=company, permissions__code="workday.manage"):
+            if not row.permissions.filter(code__in=WITH_MANAGE).exists():
+                row.permissions.add(*[permissions[c] for c in WITH_MANAGE if c in permissions])
 
         for row in Role.objects.filter(company=company).exclude(code=SAFETY_CHIEF["code"]):
             behaviour = row.base_role or row.code

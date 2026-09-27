@@ -26,19 +26,82 @@ class Workday(TenantModel):
         return self.closed_at is None
 
 
-class SafetyPermit(TenantModel):
-    """An ATS (Análisis de Trabajo Seguro): the safety permit a technician
-    opens before touching a train (F3-04). The signed copy is a media asset
-    owned by it; without that copy the permit does not count."""
+class ServiceJob(TenantModel):
+    """A service (Q17): one job the staff does on one train within a workday
+    — an alignment, a UT inspection, a topography survey — with its own ATS
+    (Análisis de Trabajo Seguro), the three signatures that start it and the
+    chief engineer's signed close that sets its final hour (Q19).
 
-    workday = models.ForeignKey(Workday, on_delete=models.CASCADE, related_name="permits")
+    Until it starts, the guard keeps every field of that train shut.
+    """
+
+    RISK_CATEGORIES = (("high", "Alto"), ("medium", "Mediano"), ("low", "Bajo"))
+
+    workday = models.ForeignKey(Workday, on_delete=models.CASCADE, related_name="jobs")
     asset_group = models.ForeignKey("assets.AssetGroup", on_delete=models.PROTECT, related_name="+")
-    number = models.CharField(max_length=40)
-    document = models.ForeignKey(
-        "media.MediaAsset", on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    service_order = models.ForeignKey(
+        "services.ServiceOrder", on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+
+    # The ATS header, as the client's format prints it.
+    activity = models.CharField(max_length=200, blank=True, help_text="Nombre de la actividad y/o trabajo")
+    holder = models.CharField(max_length=160, blank=True, help_text="Titular de la actividad")
+    unit = models.CharField(max_length=120, blank=True)
+    area = models.CharField(max_length=120, blank=True)
+    zone = models.CharField(max_length=120, blank=True)
+    risk_category = models.CharField(max_length=10, choices=RISK_CATEGORIES, blank=True)
+    ppe = models.TextField(blank=True, help_text="EPP")
+    tools = models.TextField(blank=True, help_text="Equipos y herramientas")
+    # [{step, hazard, risk, level: A|M|B, score, controls}], one row per hazard.
+    steps = models.JSONField(default=list, blank=True)
+
+    started_at = models.DateTimeField(null=True, blank=True)
+    unlocked_by = models.ForeignKey(
+        "security.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+    unlocked_at = models.DateTimeField(null=True, blank=True)
+    unlock_reason = models.TextField(blank=True)
+    # The service's final hour: the moment its close was signed (Q19).
+    closed_at = models.DateTimeField(null=True, blank=True)
+    closed_by = models.ForeignKey(
+        "security.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
     )
     created_by = models.ForeignKey("security.User", on_delete=models.SET_NULL, null=True, related_name="+")
-    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+    @property
+    def is_closed(self) -> bool:
+        return self.closed_at is not None
+
+
+class JobSignature(TenantModel):
+    """One signature on a service: the three that start it, or one of the
+    crew's on its ATS. The drawing is a media asset; a crew member is listed
+    before signing, so the drawing and its time may still be empty."""
+
+    ROLES = (
+        ("production_engineer", "Ingeniero de producción"),
+        ("service_leader", "Líder encargado del servicio"),
+        ("plant_supervisor", "Supervisor de planta"),
+        ("crew", "Personal ejecutor"),
+    )
+
+    job = models.ForeignKey(ServiceJob, on_delete=models.CASCADE, related_name="signatures")
+    role = models.CharField(max_length=30, choices=ROLES)
+    name = models.CharField(max_length=160)
+    position = models.CharField(max_length=120, blank=True, help_text="Cargo")
+    user = models.ForeignKey(
+        "security.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+    image = models.ForeignKey(
+        "media.MediaAsset", on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+    signed_at = models.DateTimeField(null=True, blank=True)
+    captured_by = models.ForeignKey(
+        "security.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
 
     class Meta:
         ordering = ["created_at", "id"]
