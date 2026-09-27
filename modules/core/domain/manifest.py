@@ -43,6 +43,10 @@ class Manifest:
     # every write of the tenants that installed the module. A rule that spans
     # other modules' data (Fase 3's day close) lives here, not in each view.
     write_guard: str | None = None
+    # Dotted path to `observe(request, response, view_func, view_kwargs)`,
+    # told about every request once it has been answered — what the activity
+    # log listens with. It can never change the response.
+    request_observer: str | None = None
     events_subscribed: tuple[str, ...] = ()
     events_published: tuple[str, ...] = ()
     provides_techniques: tuple[str, ...] = ()

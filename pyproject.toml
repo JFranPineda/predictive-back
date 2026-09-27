@@ -78,5 +78,5 @@ containers = [
     "modules.nameplate", "modules.operating_data", "modules.vibration",
     "modules.ultrasound", "modules.thermography", "modules.diagnostics", "modules.reports",
     "modules.alignment", "modules.topography", "modules.maintenance", "modules.ut_rollers",
-    "modules.workday",
+    "modules.workday", "modules.activity",
 ]

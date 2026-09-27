@@ -54,6 +54,8 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "modules.licensing.infrastructure.middleware.LicenseMiddleware",
     "modules.core.infrastructure.middleware.RequestContextMiddleware",
+    # Outside the gate and the guard, so it also hears what they refused.
+    "modules.core.infrastructure.request_observers.RequestObserverMiddleware",
     # Last: it needs the tenant resolved, and runs once the URL is known.
     "modules.core.infrastructure.module_gate.ModuleGateMiddleware",
     # After the gate: a write to an uninstalled module is a 404, not a veto.
