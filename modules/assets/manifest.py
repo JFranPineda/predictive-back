@@ -17,8 +17,10 @@ MANIFEST = Manifest(
     menu=(
         MenuItem(label="Activos", route="/assets", icon="factory", order=20,
                  permission="assets.view_equipment"),
-        MenuItem(label="Estructura", route="/assets/structure", icon="sitemap", order=21,
-                 permission="assets.view_equipment"),
+        # The plant's areas, sectors and trains are set up once and rarely
+        # touched: configuration, not daily work.
+        MenuItem(label="Estructura", route="/assets/structure", icon="sitemap", order=11,
+                 parent="settings", permission="assets.view_equipment"),
         MenuItem(label="Tipos de conjunto", route="/settings/group-kinds", icon="layers",
                  order=12, parent="settings", permission="assets.view_equipment"),
     ),

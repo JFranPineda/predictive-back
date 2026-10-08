@@ -9,6 +9,7 @@ report expects, instead of six generic points somebody has to rename.
 
 from __future__ import annotations
 
+from django.db.models import Q
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -25,6 +26,7 @@ from modules.assets.models import (
     AssetGroup,
     AssetGroupComponent,
     AssetGroupKind,
+    Equipment,
     MeasurementPoint,
     PointTemplate,
 )
@@ -57,13 +59,24 @@ class KindView(APIView):
 
 class KindCollectionView(KindView):
     def get(self, request):
+        """`?q=` finds a kind by its own name or code, by the name of a train
+        built from it, or by the TAG of a machine in one of those trains —
+        the question is usually "which kind is the MR311003's train?"."""
         language = getattr(request, "language", "es")
         rows = (
             self.scoped(request)
             .prefetch_related("components", "point_templates__component", "groups")
             .order_by("name")
         )
-        return Response([_payload(row, language) for row in rows])
+        term = (request.query_params.get("q") or "").strip()
+        if not term:
+            return Response([_payload(row, language) for row in rows])
+
+        found = _matches(request.company_id, term)
+        rows = rows.filter(Q(name__icontains=term) | Q(code__icontains=term) | Q(id__in=found))
+        return Response(
+            [{**_payload(row, language), "matches": found.get(row.id, [])} for row in rows]
+        )
 
     @tenant_atomic
     def post(self, request):
@@ -240,6 +253,39 @@ def _match_components(group: AssetGroup, equipments: list) -> dict:
             match.order_in_group = component.order
             match.save(update_fields=["group_component", "order_in_group"])
     return matched
+
+
+# Enough to say why a kind matched; the train list is where the rest lives.
+MATCHES_SHOWN = 5
+
+
+def _matches(company_id: int, term: str) -> dict[int, list[dict]]:
+    """Per kind, the trains that matched the search and the machines in them
+    whose TAG or name did."""
+    machines = (
+        Equipment.objects.for_company(company_id)
+        .filter(Q(client_tag__icontains=term) | Q(asset_code__icontains=term) | Q(name__icontains=term))
+        .values("asset_group_id", "client_tag", "asset_code", "name")
+    )
+    by_group: dict[int, list[str]] = {}
+    for machine in machines:
+        by_group.setdefault(machine["asset_group_id"], []).append(
+            machine["client_tag"] or machine["asset_code"] or machine["name"]
+        )
+    groups = (
+        AssetGroup.objects.for_company(company_id)
+        .filter(Q(name__icontains=term) | Q(id__in=by_group))
+        .exclude(kind__isnull=True)
+        .values("id", "name", "kind_id")
+        .order_by("name")
+    )
+    found: dict[int, list[dict]] = {}
+    for group in groups:
+        shown = found.setdefault(group["kind_id"], [])
+        if len(shown) < MATCHES_SHOWN:
+            tags = list(dict.fromkeys(by_group.get(group["id"], [])))[:3]
+            shown.append({"id": group["id"], "name": group["name"], "tags": tags})
+    return found
 
 
 def _payload(kind: AssetGroupKind, language: str) -> dict:
