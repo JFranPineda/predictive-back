@@ -14,7 +14,7 @@ from rest_framework.views import APIView
 
 from modules.core.domain.i18n import SUPPORTED_LANGUAGES
 from modules.measurements.domain.families import is_offered
-from modules.measurements.domain.magnitude_order import display_order_for
+from modules.measurements.domain.magnitude_order import display_order_for, in_record_by_default
 from modules.measurements.models import Magnitude, Technique, Unit
 from modules.security.infrastructure.access import build_actor
 
@@ -139,6 +139,10 @@ class MagnitudeListView(APIView):
             decimals=int(request.data.get("decimals") or 2),
             display_order=int(request.data.get("display_order") or display_order_for(code)),
             higher_is_worse=bool(request.data.get("higher_is_worse", True)),
+            # Created from the screen with its two switches already chosen;
+            # without them, the record's own default for that code.
+            in_record=bool(request.data.get("in_record", in_record_by_default(code))),
+            template_only=bool(request.data.get("template_only", False)),
             translations={"name": _names(request.data, name)},
         )
         return Response(_payload(magnitude, language), status=201)
