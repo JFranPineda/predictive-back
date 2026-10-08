@@ -11,7 +11,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
-from django.conf import settings
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -36,117 +35,8 @@ from modules.ut_rollers.domain.rollers import (
     tally,
 )
 from modules.ut_rollers.infrastructure.readings import ReplacingReadingRepository
-from modules.ut_rollers.infrastructure.setup import KIND
 from modules.ut_rollers.interfaces.common import find_order, lock_of, require, rollers_of, visit_for
 from modules.ut_rollers.models import UTIndication
-
-MAX_ROLLERS = 200
-
-
-class RollerGroupsView(APIView):
-    """`GET ut-rollers/groups/` — the trains of kind Rodillos."""
-
-    permission_classes = (IsAuthenticated,)
-
-    def get(self, request):
-        actor = require(request, "ut_rollers.view")
-        from modules.assets.models import AssetGroup
-
-        groups = AssetGroup.objects.for_company(request.company_id).filter(kind__code=KIND)
-        if actor.area_ids is not None:
-            groups = groups.filter(sector__area_id__in=actor.area_ids)
-        return Response(
-            [
-                {
-                    "id": group.id,
-                    "name": group.name,
-                    "rollers": group.equipments.filter(
-                        equipment_type="roller", retired_at__isnull=True
-                    ).count(),
-                }
-                for group in groups.order_by("name")
-            ]
-        )
-
-
-class RollerCreateView(APIView):
-    """`POST ut-rollers/groups/<id>/rollers/` with `{"numbers": [1, 2, …]}`.
-
-    All or nothing against the plan: a load that does not fit whole creates
-    none of it (V3-36). Numbers already in the group are skipped, so the call
-    can be repeated.
-    """
-
-    permission_classes = (IsAuthenticated,)
-
-    @tenant_atomic
-    def post(self, request, group_id: int):
-        actor = require(request, "ut_rollers.manage_rollers")
-        from modules.assets.models import AssetGroup, Equipment, MeasurementPoint
-
-        group = (
-            AssetGroup.objects.for_company(request.company_id)
-            .select_related("sector__area", "kind")
-            .filter(id=group_id, kind__code=KIND)
-            .first()
-        )
-        if group is None:
-            raise ValidationError("Ese conjunto no existe o no es de rodillos")
-        if not actor.may_reach_area(group.sector.area_id):
-            raise PermissionDenied("Ese conjunto está fuera de tu alcance")
-
-        numbers = sorted({int(n) for n in request.data.get("numbers") or [] if str(n).strip()})
-        if not numbers or len(numbers) > MAX_ROLLERS or min(numbers) < 1:
-            raise ValidationError(f"Indica de 1 a {MAX_ROLLERS} números de rodillo")
-        existing = set(
-            group.equipments.filter(equipment_type="roller").values_list("order_in_group", flat=True)
-        )
-        new = [number for number in numbers if number not in existing]
-        _ensure_plan_room(request, len(new))
-
-        from modules.assets.domain.asset_code import generate as generate_code
-
-        component = group.kind.components.first()
-        taken = set(Equipment.objects.for_company(request.company_id).values_list("asset_code", flat=True))
-        for number in new:
-            code = generate_code(
-                area_code=group.sector.area.code,
-                equipment_type="roller",
-                client_tag=None,
-                taken=taken,
-            )
-            taken.add(code)
-            roller = Equipment.objects.create(
-                company_id=request.company_id,
-                asset_group=group,
-                asset_code=code,
-                client_tag=f"{group.name} {number}"[:60],
-                name=f"POLÍN {number}",
-                equipment_type="roller",
-                position_in_group="driven",
-                group_component=component,
-                order_in_group=number,
-                monitoring_frequency="on_demand",
-                lubrication_type="none",
-            )
-            for point in range(1, POINTS + 1):
-                MeasurementPoint.objects.create(
-                    company_id=request.company_id,
-                    equipment=roller,
-                    number=point,
-                    axis="N",
-                    side="custom",
-                    point_type="bearing",
-                    label=f"P{point}",
-                )
-        record(
-            request,
-            "ut_rollers.rollers_added",
-            object_type="asset_group",
-            object_id=group.id,
-            after={"numbers": new},
-        )
-        return Response({"created": new, "skipped": sorted(existing & set(numbers))}, status=201)
 
 
 class RollerSheetView(APIView):
@@ -433,26 +323,6 @@ def _decimal(raw) -> Decimal | None:
     if value < 0:
         raise ValidationError("Un espesor no puede ser negativo")
     return value
-
-
-def _ensure_plan_room(request, adding: int) -> None:
-    tenant = getattr(request, "tenant", None)
-    if tenant is None or adding == 0:
-        return
-    from modules.assets.infrastructure.plan_counts import equipment_in_plan
-    from modules.licensing.application.license_service import PlanLimitReachedError, ensure_room
-
-    try:
-        ensure_room(
-            tenant.code,
-            "equipment",
-            equipment_in_plan(request.company_id),
-            secret=settings.LICENSE_SECRET,
-            adding=adding,
-        )
-    except PlanLimitReachedError as cause:
-        record(request, "license.limit_reached", object_type="equipment", after={"adding": adding})
-        raise ValidationError(str(cause)) from cause
 
 
 def _find_indication(request, indication_id: int) -> UTIndication:

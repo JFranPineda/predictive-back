@@ -154,3 +154,10 @@ def test_a_roller_catalogued_without_an_order_still_belongs_to_its_train(monkeyp
     assert guard._of_rollers("RollerCreateView", {"group_id": 7}, {}) == (None, 1, 7, None)
     assert guard._of_rollers("JournalSheetView", {"group_id": 7, "order_id": 3}, {}) == (None, 1, 7, 3)
     assert guard._of_rollers("RollerGroupsView", {}, {}) is None
+
+
+def test_retiring_or_removing_a_roller_belongs_to_its_train(monkeypatch):
+    from modules.workday.infrastructure import guard
+
+    monkeypatch.setattr(guard, "_of_equipment", lambda equipment_id: (None, 1, 7, None))
+    assert guard._of_rollers("RollerDetailView", {"roller_id": 559}, {}) == (None, 1, 7, None)

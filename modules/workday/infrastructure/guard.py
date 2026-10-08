@@ -275,6 +275,8 @@ def _of_rollers(view_name, view_kwargs, body):
         return _of_equipment(equipment_id)
     if view_name == "IndicationListView" and body.get("equipment"):
         return _of_equipment(body["equipment"])
+    if "roller_id" in view_kwargs:
+        return _of_equipment(view_kwargs["roller_id"])
     group_id = view_kwargs.get("group_id") or body.get("group")
     if not group_id:
         return None
