@@ -70,7 +70,7 @@ class AlignmentRecordListView(APIView):
             raise PermissionDenied("Falta el permiso alignment.view")
 
         rows = AlignmentRecord.objects.for_company(request.company_id).select_related(
-            "asset_group__sector__area", "service_visit", "diagnosed_fault"
+            "asset_group__sector__area", "service_visit__service_order", "diagnosed_fault"
         )
         if actor.area_ids is not None:
             rows = rows.filter(asset_group__sector__area_id__in=actor.area_ids)
@@ -246,18 +246,34 @@ class AlignmentPhotoView(APIView):
 
 def _writable_record(request, record_id: int) -> AlignmentRecord:
     record = _record(request, record_id)
-    actor = build_actor(request.user, request.company_id)
-    if record.service_visit_id and not can_edit_visit(actor, visit_ref(record.service_visit)):
-        raise PermissionDenied("Esta visita no es tuya o ya está cerrada")
-    if not record.service_visit_id and not actor.has("alignment.manage"):
-        raise PermissionDenied("Falta el permiso alignment.manage")
+    refusal = _refusal(build_actor(request.user, request.company_id), record)
+    if refusal:
+        raise PermissionDenied(refusal)
     return record
+
+
+def _actor_of(request):
+    """Built once per request: a list of two hundred records would otherwise
+    ask for the same permissions two hundred times."""
+    if not hasattr(request, "_alignment_actor"):
+        request._alignment_actor = build_actor(request.user, request.company_id)
+    return request._alignment_actor
+
+
+def _refusal(actor, record: AlignmentRecord) -> str | None:
+    """Why this actor may not change the record: a visit's alignment follows
+    its visit; a one-off job, the module's permission."""
+    if record.service_visit_id and not can_edit_visit(actor, visit_ref(record.service_visit)):
+        return "Esta visita no es tuya o ya está cerrada"
+    if not record.service_visit_id and not actor.has("alignment.manage"):
+        return "Falta el permiso alignment.manage"
+    return None
 
 
 def _record(request, record_id: int) -> AlignmentRecord:
     record = (
         AlignmentRecord.objects.for_company(request.company_id)
-        .select_related("asset_group", "service_visit")
+        .select_related("asset_group", "service_visit__service_order")
         .filter(id=record_id)
         .first()
     )
@@ -490,6 +506,9 @@ def _payload(request, record: AlignmentRecord) -> dict:
         "id": record.id,
         "asset_group": {"id": record.asset_group_id, "name": record.asset_group.name},
         "service_visit_id": record.service_visit_id,
+        # The order is how the office names the job; a one-off has none.
+        "order_code": record.service_visit.service_order.code if record.service_visit_id else None,
+        "can_edit": _refusal(_actor_of(request), record) is None,
         "driver_label": record.driver_label,
         "driven_label": record.driven_label,
         "rpm": str(record.rpm),
