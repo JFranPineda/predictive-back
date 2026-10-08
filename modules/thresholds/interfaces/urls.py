@@ -7,6 +7,7 @@ from modules.thresholds.interfaces.admin_views import (
     ThresholdSetCollectionView,
     ThresholdSetDetailView,
 )
+from modules.thresholds.interfaces.profile_views import StatusProfileDetailView, StatusProfileListView
 from modules.thresholds.interfaces.views import (
     StandardListView,
     StatusDetailView,
@@ -16,6 +17,8 @@ from modules.thresholds.interfaces.views import (
 
 urlpatterns = [
     path("statuses/", StatusListView.as_view(), name="statuses"),
+    path("status-profiles/", StatusProfileListView.as_view(), name="status-profiles"),
+    path("status-profiles/<slug:technique_code>/", StatusProfileDetailView.as_view(), name="status-profile"),
     path("statuses/new/", StatusCollectionView.as_view(), name="status-create"),
     path("statuses/<int:status_id>/", StatusDetailView.as_view(), name="status-detail"),
     path("standards/", StandardListView.as_view(), name="standards"),
