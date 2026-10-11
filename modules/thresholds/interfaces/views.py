@@ -156,8 +156,11 @@ class ThresholdSetListView(APIView):
 
     def get(self, request):
         language = getattr(request, "language", "es")
+        # Retired criteria stay in the database for the readings they judged,
+        # not on the list: "Retirar" used to look like it did nothing.
         queryset = (
             ThresholdSet.objects.for_company(request.company_id)
+            .filter(is_active=True)
             .select_related("standard", "machine_class", "author")
             .prefetch_related("bands__status")
         )
