@@ -23,7 +23,7 @@ from modules.measurements.domain.spectra import SpectrumFormatError, parse_csv
 from modules.measurements.models import Spectrum
 from modules.media.domain.formats import is_image
 from modules.media.infrastructure.local_store import store
-from modules.media.infrastructure.uploads import UploadRejectedError, store_upload
+from modules.media.infrastructure.uploads import UploadRejectedError, forget_after_commit, store_upload
 from modules.security.infrastructure.access import build_actor
 
 MAX_CSV_BYTES = 8 * 1024 * 1024
@@ -146,12 +146,9 @@ class SpectrumDetailView(APIView):
     def delete(self, request, spectrum_id: int):
         _require(request, "vibration.diagnose", "measurements.add_reading")
         spectrum = _get(request, spectrum_id)
-        if spectrum.data_key:
-            try:
-                store().delete(spectrum.data_key)
-            except (OSError, ValueError):
-                pass
+        data_key = spectrum.data_key
         spectrum.delete()
+        forget_after_commit([data_key])
         return Response(status=204)
 
 

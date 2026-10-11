@@ -68,17 +68,36 @@ def release(asset: MediaAsset) -> None:
     shared = MediaAsset.objects.filter(
         company_id=asset.company_id, original_key=asset.original_key
     ).exclude(id=asset.id).exists()
-    if not shared:
-        backend = store()
-        for key in [asset.original_key, *(d.get("key") for d in asset.derivatives.values())]:
-            if key:
-                try:
-                    backend.delete(key)
-                except (OSError, ValueError):
-                    # The row is what the app reads; a missing file must not
-                    # leave an undeletable record behind.
-                    pass
+    keys = [] if shared else [asset.original_key, *(d.get("key") for d in asset.derivatives.values())]
     asset.delete()
+    forget_after_commit(keys)
+
+
+def forget_after_commit(keys) -> None:
+    """Removes stored files once the deletion is committed, never before.
+
+    Deleting them first meant a request that failed later — or a rolled-back
+    transaction — kept the row and lost the file: a gallery tile pointing at
+    nothing, and no way back.
+    """
+    from django.db import transaction
+
+    from modules.licensing.infrastructure.context import current_alias
+
+    wanted = [key for key in keys if key]
+    if not wanted:
+        return
+
+    def forget():
+        backend = store()
+        for key in wanted:
+            try:
+                backend.delete(key)
+            except (OSError, ValueError):
+                # The row is gone; a file already missing is not an error.
+                pass
+
+    transaction.on_commit(forget, using=current_alias())
 
 
 def _ownership(owner_type: str, owner_id: int) -> dict:
