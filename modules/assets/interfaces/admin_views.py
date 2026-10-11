@@ -580,7 +580,15 @@ def _soft_delete(row, dependants: int, label: str):
     Anything with children or readings behind it is deactivated instead, which
     keeps every past report readable.
     """
+    # A sector cannot be switched off — it has no such state — so one with
+    # trains under it is refused with the reason instead of failing.
+    can_deactivate = hasattr(row, "is_active")
     if dependants:
+        if not can_deactivate:
+            return Response(
+                {"detail": f"No se puede borrar: tiene {dependants} {label}. Muévelos o bórralos antes."},
+                status=409,
+            )
         row.is_active = False
         row.save(update_fields=["is_active"])
         return Response({"id": row.id, "is_active": False, "deactivated": True,
@@ -588,6 +596,8 @@ def _soft_delete(row, dependants: int, label: str):
     try:
         row.delete()
     except ProtectedError:
+        if not can_deactivate:
+            return Response({"detail": "No se puede borrar: otros registros dependen de él."}, status=409)
         row.is_active = False
         row.save(update_fields=["is_active"])
         return Response({"id": row.id, "is_active": False, "deactivated": True})

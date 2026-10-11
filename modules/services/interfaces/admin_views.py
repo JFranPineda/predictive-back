@@ -284,8 +284,15 @@ class VisitParticipantView(ServiceAdminView):
         role = request.data.get("role") or "assistant"
         if role not in PARTICIPANT_ROLES:
             raise ValidationError(f"Rol desconocido: {role}")
+        from modules.security.models import Membership
+
+        member = Membership.objects.filter(
+            company_id=request.company_id, user_id=request.data.get("user") or None
+        ).first()
+        if member is None:
+            raise ValidationError("Elige a una persona de la empresa")
         participant, created = VisitParticipant.objects.get_or_create(
-            visit=visit, user_id=request.data.get("user"), defaults={"role": role}
+            visit=visit, user_id=member.user_id, defaults={"role": role}
         )
         if not created:
             participant.role = role

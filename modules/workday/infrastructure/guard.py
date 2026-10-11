@@ -47,7 +47,12 @@ def guard(request, view_func, view_kwargs):
     today = timezone.localdate()
     if _closed(company_id, today):
         return _refuse(423, "workday_closed", _closed_message(today))
-    subject = _subject(request, module, view_func, view_kwargs)
+    try:
+        subject = _subject(request, module, view_func, view_kwargs)
+    except (ValueError, TypeError):
+        # Junk where an id goes: the view answers it with a 400; the guard
+        # runs before it and must not turn it into a 500.
+        return None
     refusal = _refusal(company_id, subject) if subject else None
     return _refuse(*refusal) if refusal else None
 

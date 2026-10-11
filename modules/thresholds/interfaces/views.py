@@ -108,6 +108,11 @@ class StatusDetailView(APIView):
             raise ValidationError(
                 f"No se puede borrar: lo usan {readings} lectura(s) y {bands} banda(s)"
             )
+        # Only offered by some services (Condiciones por servicio): the
+        # offer goes with the state, nothing was ever graded with it.
+        from modules.thresholds.infrastructure.models import TechniqueStatusOption
+
+        TechniqueStatusOption.objects.filter(status=row).delete()
         row.delete()
         return Response(status=204)
 

@@ -1,5 +1,6 @@
 from django.urls import path
 
+from modules.core.interfaces.methods import CREATE_ONLY, DELETE_ONLY
 from modules.ut_rollers.interfaces.catalogue_views import (
     RollerCollectionView,
     RollerDetailView,
@@ -29,11 +30,11 @@ urlpatterns = [
     path("ut-rollers/orders/<int:order_id>/groups/<int:group_id>/report/", GroupReportView.as_view()),
     path(
         "ut-rollers/orders/<int:order_id>/groups/<int:group_id>/report/images/",
-        GroupReportImageView.as_view(),
+        GroupReportImageView.as_view(**CREATE_ONLY),
     ),
     path(
         "ut-rollers/orders/<int:order_id>/groups/<int:group_id>/report/images/<int:asset_id>/",
-        GroupReportImageView.as_view(),
+        GroupReportImageView.as_view(**DELETE_ONLY),
     ),
     path("ut-rollers/indications/", IndicationListView.as_view()),
     path("ut-rollers/indications/<int:indication_id>/", IndicationDetailView.as_view()),

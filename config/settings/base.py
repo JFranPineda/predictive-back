@@ -114,6 +114,7 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 50,
     "DEFAULT_FILTER_BACKENDS": ("django_filters.rest_framework.DjangoFilterBackend",),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "EXCEPTION_HANDLER": "modules.core.interfaces.errors.exception_handler",
     # An eight-character code is only as strong as the guesses it allows.
     # Ten a minute per address makes brute force take longer than the code
     # lives; a technician who mistypes twice never notices the limit.

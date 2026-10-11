@@ -1,5 +1,6 @@
 from django.urls import path
 
+from modules.core.interfaces.methods import CREATE_ONLY, DELETE_ONLY
 from modules.workday.interfaces.job_views import (
     JobCloseView,
     JobCollectionView,
@@ -24,8 +25,8 @@ urlpatterns = [
     path("workdays/<int:workday_id>/jobs/", JobCollectionView.as_view()),
     path("workdays/<int:workday_id>/observations/", ObservationCollectionView.as_view()),
     path("workday-jobs/<int:job_id>/", JobDetailView.as_view()),
-    path("workday-jobs/<int:job_id>/crew/", JobCrewView.as_view()),
-    path("workday-jobs/<int:job_id>/crew/<int:signature_id>/", JobCrewView.as_view()),
+    path("workday-jobs/<int:job_id>/crew/", JobCrewView.as_view(**CREATE_ONLY)),
+    path("workday-jobs/<int:job_id>/crew/<int:signature_id>/", JobCrewView.as_view(**DELETE_ONLY)),
     path("workday-jobs/<int:job_id>/sign/", JobSignView.as_view()),
     path("workday-jobs/<int:job_id>/unlock/", JobUnlockView.as_view()),
     path("workday-jobs/<int:job_id>/close/", JobCloseView.as_view()),
