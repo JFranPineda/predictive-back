@@ -157,6 +157,7 @@ def roll_up(rows: list[EquipmentStatus], levels: tuple[str, ...] = LEVELS) -> li
     nodes = []
     for key, bucket in buckets.items():
         statuses = [row.effective for row in bucket]
+        worst = worst_of(statuses)
         node = SummaryNode(
             key=f"{level}:{key}",
             label=labels[key],
@@ -164,8 +165,14 @@ def roll_up(rows: list[EquipmentStatus], levels: tuple[str, ...] = LEVELS) -> li
             total=len(bucket),
             evaluated=sum(1 for row in bucket if row.counts_for_health),
             counts=_count(statuses),
-            worst=worst_of(statuses),
-            driver=worst_driver([row.driver for row in bucket if row.driver]),
+            worst=worst,
+            # The number explains the colour, so it comes from a machine that
+            # has that colour. Each machine is judged by its own criterion: a
+            # gearbox at 7.28 mm/s is in Alarma while a motor at 7.14 is in
+            # Parada, and printing 7.28 on a red area blamed the wrong one.
+            driver=worst_driver(
+                [row.driver for row in bucket if row.driver and row.effective.code == worst.code]
+            ),
             children=roll_up(bucket, rest),
         )
         nodes.append(node)

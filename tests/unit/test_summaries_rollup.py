@@ -1,6 +1,7 @@
 """T7: the plant traffic light, built from the areas of the real RGP."""
 
 from modules.summaries.domain.rollup import (
+    Driver,
     EquipmentStatus,
     by_technique,
     roll_up,
@@ -10,7 +11,7 @@ from modules.thresholds.domain.defaults import ALARM, OFF, OPERATIONAL, RETIRED,
 
 
 def equipment(equipment_id, condition=None, availability=None, area=101, sector=1,
-              group=1, technique="vibration"):
+              group=1, technique="vibration", reading=None):
     return EquipmentStatus(
         equipment_id=equipment_id,
         name=f"EQ-{equipment_id}",
@@ -23,6 +24,8 @@ def equipment(equipment_id, condition=None, availability=None, area=101, sector=
         technique_code=technique,
         condition=condition,
         availability=availability,
+        driver=Driver(reading, "mm/s", "vel_rms", True, equipment_id, f"EQ-{equipment_id}")
+        if reading is not None else None,
     )
 
 
@@ -129,3 +132,25 @@ class TestPerTechnique:
         ]
         summaries = by_technique(rows)
         assert summaries["vibration"][0].color != summaries["thermography"][0].color
+
+
+class TestDriver:
+    def test_the_number_comes_from_a_machine_with_the_colour_it_explains(self):
+        # Area 562: a gearbox at 7.28 mm/s is only in Alarma under its own
+        # criterion, a motor at 7.14 is in Parada. The red area must print
+        # the motor's 7.14, not the gearbox's higher but milder 7.28.
+        rows = [
+            equipment(1, condition=ALARM, group=1, reading=7.28),
+            equipment(2, condition=SHUTDOWN, group=2, reading=7.14),
+            equipment(3, condition=SHUTDOWN, group=3, reading=7.12),
+        ]
+        [area] = roll_up(rows, ("area", "asset_group"))
+        assert area.worst is SHUTDOWN
+        assert (area.driver.value, area.driver.equipment_tag) == (7.14, "EQ-2")
+        gearbox = next(node for node in area.children if node.worst is ALARM)
+        assert gearbox.driver.value == 7.28
+
+    def test_no_number_rather_than_one_from_a_milder_machine(self):
+        rows = [equipment(1, condition=ALARM, reading=7.28), equipment(2, condition=SHUTDOWN)]
+        [area] = roll_up(rows, ("area",))
+        assert area.driver is None
