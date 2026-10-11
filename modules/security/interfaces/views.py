@@ -76,6 +76,10 @@ def _member_payload(membership) -> dict:
         "id": membership.user_id,
         "email": membership.user.email,
         "full_name": membership.user.get_full_name(),
+        # Separately: splitting the full name at its first space turned
+        # "Juan Carlos Pérez" into first name "Juan" on the next save.
+        "first_name": membership.user.first_name,
+        "last_name": membership.user.last_name,
         "initials": membership.user.initials,
         "role": role.code,
         "role_name": role.name,
