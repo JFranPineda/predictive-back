@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from django.db.models import Q
+from django.utils.dateparse import parse_date
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -35,8 +37,27 @@ class AuthorshipView(APIView):
         performed_by = request.query_params.get("performed_by")
         if performed_by:
             queryset = queryset.filter(participants__user_id=performed_by)
-        if request.query_params.get("equipment"):
-            queryset = queryset.filter(equipment_id=request.query_params["equipment"])
+        params = request.query_params
+        if params.get("equipment"):
+            queryset = queryset.filter(equipment_id=params["equipment"])
+        # Thousands of visits are found by their order, their machine or
+        # their day, never by scrolling.
+        if params.get("order"):
+            queryset = queryset.filter(service_order_id=params["order"])
+        if params.get("q"):
+            term = params["q"].strip()
+            queryset = queryset.filter(
+                Q(equipment__name__icontains=term)
+                | Q(equipment__client_tag__icontains=term)
+                | Q(equipment__asset_code__icontains=term)
+                | Q(equipment__asset_group__name__icontains=term)
+                | Q(service_order__code__icontains=term)
+            )
+        since, until = parse_date(params.get("since") or ""), parse_date(params.get("until") or "")
+        if since:
+            queryset = queryset.filter(visited_at__date__gte=since)
+        if until:
+            queryset = queryset.filter(visited_at__date__lte=until)
 
         paginator = PageNumberPagination()
         paginator.page_size = 20
