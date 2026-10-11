@@ -6,7 +6,7 @@ its own settings, and the token views import those settings back.
 
 from __future__ import annotations
 
-from rest_framework.exceptions import AuthenticationFailed
+from rest_framework.exceptions import PermissionDenied
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView
 
@@ -21,7 +21,8 @@ class MemberTokenSerializer(TokenObtainPairSerializer):
         from modules.security.infrastructure.models import Membership
 
         if not self.user.is_superuser and not Membership.objects.filter(user=self.user).exists():
-            raise AuthenticationFailed("Tu acceso a esta empresa fue retirado. Habla con el administrador.")
+            # 403, not 401: the password was right, and the screen says why.
+            raise PermissionDenied("Tu acceso a esta empresa fue retirado. Habla con el administrador.")
         return data
 
 
