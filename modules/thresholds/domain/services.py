@@ -167,3 +167,23 @@ def standard_for(report: str | None, equipment: str | None, *, own: bool) -> str
     if own and equipment:
         return equipment
     return report or equipment
+
+
+def tally_impact(verdicts: Iterable[tuple[int, str | None, Status | None]]) -> tuple[int, dict[str, int]]:
+    """How many equipments a criterion would move, and to which status.
+
+    Each verdict is `(equipment, status it has now, status it would get)`. An
+    equipment with several points counts once, at the worst status it would
+    move to: that is the one its card would show.
+    """
+    worst: dict[int, Status] = {}
+    for equipment_id, before, after in verdicts:
+        if after is None or after.code == before:
+            continue
+        current = worst.get(equipment_id)
+        if current is None or after.severity > current.severity:
+            worst[equipment_id] = after
+    by_status: dict[str, int] = {}
+    for status in worst.values():
+        by_status[status.code] = by_status.get(status.code, 0) + 1
+    return len(worst), by_status

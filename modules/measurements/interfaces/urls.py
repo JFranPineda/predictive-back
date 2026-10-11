@@ -12,6 +12,7 @@ from modules.measurements.interfaces.catalogue_views import (
 )
 from modules.measurements.interfaces.export_views import RecordExportView, TrainRecordExportView
 from modules.measurements.interfaces.matrix_views import EquipmentMatrixView, TrainMatrixView
+from modules.measurements.interfaces.simulate_views import ThresholdSetSimulateView
 from modules.measurements.interfaces.spectrum_views import (
     SpectrumCollectionView,
     SpectrumCurveView,
@@ -22,6 +23,8 @@ from modules.measurements.interfaces.train_views import TrainIndexView
 from modules.measurements.interfaces.views import TrendView
 
 urlpatterns = [
+    path("threshold-sets/<int:set_id>/simulate/", ThresholdSetSimulateView.as_view(),
+         name="threshold-set-simulate"),
     path("measurement-trains/", TrainIndexView.as_view(), name="measurement-trains"),
     path("service-visits/<int:visit_id>/thermograms/", ThermogramView.as_view(),
          name="visit-thermograms"),
