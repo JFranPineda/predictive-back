@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from modules.core.domain.i18n import parse_accept_language, resolve_language
@@ -25,6 +25,10 @@ class TenantJWTAuthentication(JWTAuthentication):
         user, _token = result
         http_request = request._request
         http_request.company_id = self._company(user, request.headers.get("X-Company-Id"))
+        # Removing someone's access takes effect on their next click, not when
+        # their token happens to expire.
+        if http_request.company_id is None and not user.is_superuser:
+            raise AuthenticationFailed("Tu acceso a esta empresa fue retirado. Habla con el administrador.")
         http_request.language = resolve_language(
             requested=request.headers.get("X-Language")
             or parse_accept_language(request.headers.get("Accept-Language")),
@@ -53,3 +57,4 @@ class TenantJWTAuthentication(JWTAuthentication):
             .values_list("default_language", flat=True)
             .first()
         )
+

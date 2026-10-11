@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from modules.security.domain.actor import behaviour_of
+from modules.security.domain.policies import ADMIN_ROLES, handing_out_refusal, is_admin
+from modules.security.infrastructure.access import build_actor
 from modules.security.models import Membership
+
+# Who sees the people of the company with their e-mail, role and permissions.
+# Everyone else gets the directory: a name to pick as a participant.
+PEOPLE_READERS = ("security.view_user", "security.manage_user")
 
 
 class UserListView(APIView):
@@ -17,13 +25,41 @@ class UserListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        actor = build_actor(request.user, request.company_id)
         memberships = (
             Membership.objects.filter(company_id=request.company_id)
             .select_related("user", "role")
             .prefetch_related("restrictions", "role__permissions")
             .order_by("user__first_name", "user__last_name")
         )
+        if not any(actor.has(code) for code in PEOPLE_READERS):
+            return Response([_directory_payload(membership) for membership in memberships])
         return Response([_member_payload(membership) for membership in memberships])
+
+
+def _directory_payload(membership) -> dict:
+    """What a technician needs to name a colleague on a visit — and nothing
+    an administrator would not want them to read: no e-mail, no permissions."""
+    return {
+        "id": membership.user_id,
+        "full_name": membership.user.get_full_name(),
+        "initials": membership.user.initials,
+        "role_name": membership.role.name,
+        "is_active": membership.user.is_active,
+    }
+
+
+def _role_refusal(actor, role) -> str | None:
+    """Giving someone a role gives them everything the role holds."""
+    permissions = {p.code for p in role.permissions.all() if p.is_active}
+    return handing_out_refusal(actor, permissions, behaviour_of(role.base_role or role.code))
+
+
+def _guard_admin_member(actor, membership) -> None:
+    """An administrator's access is changed only by an administrator: a
+    manager could otherwise demote or switch off the people above them."""
+    if not is_admin(actor) and behaviour_of(membership.role.base_role or membership.role.code) in ADMIN_ROLES:
+        raise PermissionDenied("Solo un administrador puede cambiar el acceso de un administrador")
 
 
 def _member_payload(membership) -> dict:
@@ -69,10 +105,7 @@ class UserCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        from rest_framework.exceptions import PermissionDenied
-
         from modules.security.domain.actor import Role
-        from modules.security.infrastructure.access import build_actor
         from modules.security.infrastructure.models import Role as RoleModel
         from modules.security.infrastructure.models import User
 
@@ -97,6 +130,9 @@ class UserCreateView(APIView):
         if role is None:
             return Response({"type": "unknown_role", "title": "Rol desconocido", "status": 400},
                             status=400)
+        refusal = _role_refusal(actor, role)
+        if refusal:
+            raise PermissionDenied(refusal)
 
         # External is a behaviour, not a name: a company's "Contratista" built
         # on external_inspector is external too.
@@ -141,10 +177,7 @@ class UserDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def patch(self, request, user_id: int):
-        from rest_framework.exceptions import PermissionDenied
-
         from modules.security.domain.actor import Role
-        from modules.security.infrastructure.access import build_actor
         from modules.security.infrastructure.models import Role as RoleModel
 
         actor = build_actor(request.user, request.company_id)
@@ -158,6 +191,7 @@ class UserDetailView(APIView):
         )
         if membership is None:
             return Response({"type": "not_found", "status": 404}, status=404)
+        _guard_admin_member(actor, membership)
 
         from modules.core.infrastructure.audit import record
 
@@ -174,6 +208,9 @@ class UserDetailView(APIView):
             role = RoleModel.objects.filter(company_id=request.company_id, code=role_code).first()
             if role is None:
                 return Response({"type": "unknown_role", "status": 400}, status=400)
+            refusal = _role_refusal(actor, role)
+            if refusal:
+                raise PermissionDenied(refusal)
             membership.role = role
             membership.save(update_fields=["role"])
             membership.user.is_external = (
@@ -229,10 +266,6 @@ class UserDetailView(APIView):
         Their name stays on every reading and conclusion they wrote; deleting
         the user would take the authorship of past reports with it.
         """
-        from rest_framework.exceptions import PermissionDenied
-
-        from modules.security.infrastructure.access import build_actor
-
         actor = build_actor(request.user, request.company_id)
         if not actor.has("security.manage_user"):
             raise PermissionDenied("No puedes administrar usuarios")
@@ -241,9 +274,14 @@ class UserDetailView(APIView):
 
         membership = Membership.objects.filter(
             company_id=request.company_id, user_id=user_id
-        ).first()
+        ).select_related("role", "user").first()
         if membership is None:
             return Response({"type": "not_found", "status": 404}, status=404)
+        _guard_admin_member(actor, membership)
+        from modules.core.infrastructure.audit import record
+
+        record(request, "user.removed", object_type="user", object_id=user_id,
+               before={"email": membership.user.email, "role": membership.role.code})
         membership.delete()
         return Response(status=204)
 

@@ -16,6 +16,8 @@ from rest_framework.views import APIView
 from modules.core.infrastructure.discovery import discover_manifests
 from modules.core.infrastructure.transactions import tenant_atomic
 from modules.security.domain.actor import Role as RoleEnum
+from modules.security.domain.actor import behaviour_of
+from modules.security.domain.policies import ADMIN_ROLES, handing_out_refusal, is_admin
 from modules.security.infrastructure.access import build_actor
 from modules.security.models import Membership, Permission, Role
 
@@ -37,13 +39,26 @@ ACTIONS = {
 }
 
 
+# Who may read the roles: whoever manages them, or manages or views people.
+READERS = ("security.manage_role", "security.manage_user", "security.view_user")
+
+
 class RoleAdminView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def require(self, request) -> None:
+    def require(self, request):
         actor = build_actor(request.user, request.company_id)
         if not actor.has("security.manage_role"):
             raise PermissionDenied("Falta el permiso security.manage_role")
+        return actor
+
+    def require_reader(self, request):
+        """The list of roles is also what the Usuarios screen assigns from: who
+        manages people reads it too, nobody else does."""
+        actor = build_actor(request.user, request.company_id)
+        if not any(actor.has(code) for code in READERS):
+            raise PermissionDenied("No puedes ver los roles")
+        return actor
 
     def scoped(self, request):
         # System roles (company=None) are shared; a company edits its own copy.
@@ -52,8 +67,7 @@ class RoleAdminView(APIView):
 
 class RoleListView(RoleAdminView):
     def get(self, request):
-        language = getattr(request, "language", "es")
-        del language
+        self.require_reader(request)
         names = {manifest.code: manifest.name for manifest in discover_manifests()}
         roles = self.scoped(request).prefetch_related("permissions").order_by("name")
         modules: dict[str, list[dict]] = {}
@@ -86,7 +100,7 @@ class RoleListView(RoleAdminView):
         })
 
     def post(self, request):
-        self.require(request)
+        actor = self.require(request)
         name = (request.data.get("name") or "").strip()
         if not name:
             raise ValidationError("El nombre es obligatorio")
@@ -94,9 +108,11 @@ class RoleListView(RoleAdminView):
         if self.scoped(request).filter(code=code).exists():
             raise ValidationError(f"Ya existe un rol con el código '{code}'")
 
+        base = _base(request.data.get("base_role"))
+        _refuse_if(handing_out_refusal(actor, set(request.data.get("permissions") or []), behaviour_of(base)))
         role = Role.objects.create(
             company_id=request.company_id, code=code, name=name,
-            base_role=_base(request.data.get("base_role")),
+            base_role=base,
             description=(request.data.get("description") or "").strip()[:240],
         )
         _set_permissions(role, request.data.get("permissions"))
@@ -111,8 +127,11 @@ class RoleListView(RoleAdminView):
 class RoleDetailView(RoleAdminView):
     @tenant_atomic
     def patch(self, request, role_id: int):
-        self.require(request)
+        actor = self.require(request)
         role = _get(self.scoped(request), role_id)
+        # An administrator's role is an administrator's to change.
+        if not is_admin(actor) and behaviour_of(role.base_role or role.code) in ADMIN_ROLES:
+            raise PermissionDenied("Solo un administrador puede cambiar el rol de administrador")
         if "name" in request.data:
             role.name = (request.data.get("name") or "").strip()
             role.save(update_fields=["name"])
@@ -124,11 +143,15 @@ class RoleDetailView(RoleAdminView):
             # repointing one would silently change every account built on it.
             if role.code in {r.value for r in RoleEnum}:
                 raise ValidationError("El comportamiento de un rol del sistema no se cambia")
-            role.base_role = _base(request.data["base_role"])
+            base = _base(request.data["base_role"])
+            _refuse_if(handing_out_refusal(actor, set(), behaviour_of(base)))
+            role.base_role = base
             role.save(update_fields=["base_role"])
         if "permissions" in request.data:
             _assert_not_locking_yourself_out(request, role, request.data["permissions"])
             before = sorted(p.code for p in role.permissions.all())
+            added = set(request.data["permissions"] or []) - set(before)
+            _refuse_if(handing_out_refusal(actor, added, behaviour_of(role.base_role or role.code)))
             _set_permissions(role, request.data["permissions"])
             after = sorted(p.code for p in role.permissions.all())
             if before != after:
@@ -156,6 +179,11 @@ class RoleDetailView(RoleAdminView):
             raise ValidationError("Un rol del sistema no se elimina")
         role.delete()
         return Response(status=204)
+
+
+def _refuse_if(reason: str | None) -> None:
+    if reason:
+        raise PermissionDenied(reason)
 
 
 def _assert_not_locking_yourself_out(request, role: Role, codes) -> None:

@@ -137,3 +137,31 @@ def can_manage_thresholds(actor: Actor) -> bool:
 def visible_area_filter(actor: Actor) -> frozenset[int] | None:
     """What every queryset narrows by. None means no narrowing."""
     return actor.area_ids
+
+
+ADMIN_ROLES = frozenset({Role.COMPANY_ADMIN, Role.PLATFORM_ADMIN})
+
+
+def is_admin(actor: Actor) -> bool:
+    return actor.role in ADMIN_ROLES
+
+
+def handing_out_refusal(actor: Actor, permissions: frozenset[str] | set[str], behaviour: Role) -> str | None:
+    """Why this actor may not give these permissions, or this behaviour, to a
+    role or a person.
+
+    Nobody hands out more than they hold. Without this, a manager trusted
+    with users and roles but not with the modules could write
+    `core.manage_modules` into their own role, or raise a role to
+    administrator, and walk out with the company. Administrators are exempt:
+    they already hold everything.
+    """
+    if is_admin(actor):
+        return None
+    if behaviour in ADMIN_ROLES:
+        return "Solo un administrador puede dar el comportamiento de administrador"
+    beyond = sorted(set(permissions) - actor.permissions)
+    if beyond:
+        shown = ", ".join(beyond[:4]) + ("…" if len(beyond) > 4 else "")
+        return f"No puedes dar permisos que tú no tienes: {shown}"
+    return None
