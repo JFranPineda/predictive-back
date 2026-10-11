@@ -9,6 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from modules.assets.infrastructure.visibility import visible_equipments
 from modules.assets.models import Equipment
 from modules.nameplate.models import NameplateData
 from modules.security.infrastructure.access import build_actor
@@ -101,12 +102,12 @@ def _resolved_class(equipment: Equipment, plate: NameplateData | None) -> dict |
 
 
 def _equipment(request, equipment_id: int) -> Equipment:
-    equipment = (
+    equipment = visible_equipments(
+        request,
         Equipment.objects.for_company(request.company_id)
         .select_related("applied_standard", "machine_class")
-        .filter(id=equipment_id)
-        .first()
-    )
+        .filter(id=equipment_id),
+    ).first()
     if equipment is None:
         raise ValidationError("Ese equipo no existe")
     return equipment

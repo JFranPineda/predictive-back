@@ -212,16 +212,11 @@ def _require_view(request) -> None:
 
 
 def _visit(request, visit_id):
-    from modules.services.infrastructure.models import ServiceVisit
+    from modules.services.infrastructure.visibility import find_visible_visit
 
-    visit = (
-        ServiceVisit.objects.for_company(request.company_id)
-        .select_related("equipment__asset_group")
-        .filter(id=visit_id)
-        .first()
-    )
+    visit = find_visible_visit(request, visit_id)
     if visit is None:
-        raise ValidationError("Esa visita no existe")
+        raise ValidationError("Esa visita no existe o está fuera de tu alcance")
     return visit
 
 

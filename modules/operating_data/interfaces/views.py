@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -14,8 +14,8 @@ from modules.operating_data.domain.precision import decimals_for, to_precision
 from modules.operating_data.models import OperatingParameter, OperatingReading
 from modules.security.domain.policies import can_edit_visit
 from modules.security.infrastructure.access import build_actor
+from modules.services.infrastructure.visibility import find_visible_visit
 from modules.services.infrastructure.visit_refs import visit_ref
-from modules.services.interfaces.visit_views import _load
 
 
 class ParameterListView(APIView):
@@ -141,7 +141,7 @@ class VisitOperatingView(APIView):
 
     def get(self, request, visit_id: int):
         language = getattr(request, "language", "es")
-        visit = _load(request, visit_id)
+        visit = _visible_visit(request, visit_id)
         stored = {
             row.parameter.code: row
             for row in visit.operating_readings.select_related("parameter")
@@ -168,7 +168,7 @@ class VisitOperatingView(APIView):
 
     @tenant_atomic
     def put(self, request, visit_id: int):
-        visit = _load(request, visit_id)
+        visit = _visible_visit(request, visit_id)
         actor = build_actor(request.user, request.company_id)
         if not can_edit_visit(actor, visit_ref(visit)):
             raise PermissionDenied("Esta visita no es tuya o ya está cerrada")
@@ -217,3 +217,10 @@ def _slug(value: str) -> str:
     while "__" in cleaned:
         cleaned = cleaned.replace("__", "_")
     return cleaned.strip("_") or "param"
+
+
+def _visible_visit(request, visit_id: int):
+    visit = find_visible_visit(request, visit_id)
+    if visit is None:
+        raise NotFound("Esa visita no existe o está fuera de tu alcance")
+    return visit

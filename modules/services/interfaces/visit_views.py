@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -19,14 +19,16 @@ from modules.core.infrastructure.transactions import tenant_atomic
 from modules.diagnostics.models import EquipmentLogEntry
 from modules.measurements.domain.axes import axis_rank
 from modules.measurements.models import Reading
-from modules.security.domain.policies import can_edit_visit, can_write_log_entry
+from modules.security.domain.policies import can_edit_visit, can_view_visit, can_write_log_entry
 from modules.security.infrastructure.access import build_actor
 from modules.services.infrastructure.visit_refs import visit_ref
 from modules.services.models import ServiceVisit
 
 
 def _load(request, visit_id: int) -> ServiceVisit:
-    return (
+    """The visit, if this reader may open it: an unknown id or one of an
+    area out of reach is a 404, not a server error and not a leak."""
+    visit = (
         ServiceVisit.objects.for_company(request.company_id)
         .select_related(
             "equipment__asset_group__sector__area",
@@ -35,8 +37,12 @@ def _load(request, visit_id: int) -> ServiceVisit:
             "instrument",
         )
         .prefetch_related("participants__user", "fault_modes")
-        .get(id=visit_id)
+        .filter(id=visit_id)
+        .first()
     )
+    if visit is None or not can_view_visit(build_actor(request.user, request.company_id), visit_ref(visit)):
+        raise NotFound("Esa visita no existe o está fuera de tu alcance")
+    return visit
 
 
 class VisitDetailView(APIView):

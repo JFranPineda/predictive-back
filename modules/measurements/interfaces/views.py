@@ -4,6 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from modules.assets.infrastructure.visibility import find_visible_equipment
 from modules.measurements.models import Reading
 
 
@@ -14,6 +15,8 @@ class TrendView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, equipment_id: int):
+        if find_visible_equipment(request, equipment_id) is None:
+            return Response({"type": "not_found", "status": 404}, status=404)
         language = getattr(request, "language", "es")
         queryset = (
             Reading.objects.for_company(request.company_id)

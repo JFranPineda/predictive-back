@@ -144,7 +144,13 @@ class GroupPointsView(KindView):
     """The actual points of one train, across its equipment."""
 
     def get(self, request, group_id: int):
-        group = _get(AssetGroup.objects.for_company(request.company_id), group_id)
+        actor = build_actor(request.user, request.company_id)
+        groups = AssetGroup.objects.for_company(request.company_id)
+        if actor.area_ids is not None:
+            groups = groups.filter(sector__area_id__in=actor.area_ids)
+        if not actor.has("assets.view_equipment"):
+            raise PermissionDenied("Falta el permiso assets.view_equipment")
+        group = _get(groups, group_id)
         points = (
             MeasurementPoint.objects.for_company(request.company_id)
             .filter(equipment__asset_group=group)

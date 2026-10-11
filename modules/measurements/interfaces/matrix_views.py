@@ -62,11 +62,12 @@ class TrainMatrixView(APIView):
 
 def resolve_train(request, group_id: int) -> tuple[Equipment, str] | None:
     """The machine the record is read through, and the scope."""
-    machines = (
+    machines = _visible(
+        request,
         Equipment.objects.for_company(request.company_id)
         .select_related("asset_group__sector__area")
         .filter(asset_group_id=group_id)
-        .order_by("order_in_group", "id")
+        .order_by("order_in_group", "id"),
     )
     wanted = request.query_params.get("equipment")
     if wanted:
@@ -77,12 +78,23 @@ def resolve_train(request, group_id: int) -> tuple[Equipment, str] | None:
 
 
 def _equipment(request, equipment_id: int) -> Equipment | None:
-    return (
+    return _visible(
+        request,
         Equipment.objects.for_company(request.company_id)
         .select_related("asset_group__sector__area")
-        .filter(id=equipment_id)
-        .first()
-    )
+        .filter(id=equipment_id),
+    ).first()
+
+
+def _visible(request, machines):
+    """What this reader may see: a user narrowed to some areas got every
+    train's record by typing its id. Out of reach reads as not found."""
+    actor = build_actor(request.user, request.company_id)
+    if not actor.has("assets.view_equipment"):
+        return machines.none()
+    if actor.area_ids is not None:
+        machines = machines.filter(asset_group__sector__area_id__in=actor.area_ids)
+    return machines
 
 
 def build_matrix(request, equipment: Equipment, scope: str) -> dict:

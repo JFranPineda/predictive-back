@@ -199,6 +199,10 @@ class EquipmentMediaView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, equipment_id: int):
+        from modules.assets.infrastructure.visibility import find_visible_equipment
+
+        if find_visible_equipment(request, equipment_id) is None:
+            return Response({"type": "not_found", "status": 404}, status=404)
         queryset = (
             MediaAsset.objects.for_company(request.company_id)
             .filter(equipment_ref=equipment_id)

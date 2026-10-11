@@ -8,6 +8,7 @@ from django.http import HttpResponse
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
+from modules.assets.infrastructure.visibility import find_visible_equipment
 from modules.assets.models import Equipment
 from modules.measurements.infrastructure.record_export import (
     ExportBand,
@@ -35,12 +36,7 @@ class RecordExportView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, equipment_id: int):
-        equipment = (
-            Equipment.objects.for_company(request.company_id)
-            .select_related("asset_group__sector__area")
-            .filter(id=equipment_id)
-            .first()
-        )
+        equipment = find_visible_equipment(request, equipment_id)
         if equipment is None:
             return HttpResponse(status=404)
         return _workbook(request, equipment, request.query_params.get("scope", "group"))

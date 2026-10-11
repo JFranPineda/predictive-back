@@ -182,11 +182,18 @@ class SectorDetailView(AssetAdminView):
 
 class AssetGroupCollectionView(AssetAdminView):
     def get(self, request):
+        actor = build_actor(request.user, request.company_id)
+        if not actor.has("assets.view_equipment"):
+            raise PermissionDenied("Falta el permiso assets.view_equipment")
         queryset = (
             self.scoped(AssetGroup, request)
             .select_related("sector__area", "kind")
             .order_by("sector__area__code", "name")
         )
+        # A user narrowed to some areas sees only their trains, as the
+        # equipment list already did.
+        if actor.area_ids is not None:
+            queryset = queryset.filter(sector__area_id__in=actor.area_ids)
         if request.query_params.get("sector"):
             queryset = queryset.filter(sector_id=request.query_params["sector"])
         return Response([
