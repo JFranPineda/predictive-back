@@ -17,6 +17,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from modules.assets.infrastructure.visibility import within_reach
 from modules.assets.models import MeasurementPoint
 from modules.measurements.domain.spectra import SpectrumFormatError, parse_csv
 from modules.measurements.models import Spectrum
@@ -30,13 +31,17 @@ MAX_CAPTION = 2000
 PAGE_SIZE = 50
 
 
+# From a spectrum to the area of its machine, for the reader's reach.
+SPECTRUM_AREA = "point__equipment__asset_group__sector__area_id"
+
+
 class SpectrumCollectionView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
 
     def get(self, request):
         queryset = (
-            Spectrum.objects.for_company(request.company_id)
+            within_reach(request, Spectrum.objects.for_company(request.company_id), SPECTRUM_AREA)
             .select_related("point__equipment", "image", "unit")
             .prefetch_related("diagnosis")
             .order_by("-taken_at", "-id")
@@ -259,7 +264,7 @@ def _payload(spectrum: Spectrum, backend) -> dict:
 
 def _get(request, spectrum_id: int) -> Spectrum:
     spectrum = (
-        Spectrum.objects.for_company(request.company_id)
+        within_reach(request, Spectrum.objects.for_company(request.company_id), SPECTRUM_AREA)
         .select_related("point__equipment", "image", "unit")
         .prefetch_related("diagnosis")
         .filter(id=spectrum_id)

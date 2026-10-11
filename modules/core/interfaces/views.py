@@ -42,24 +42,48 @@ class ModuleViewSet(viewsets.ViewSet):
 
     @action(detail=True, methods=["post"])
     def install(self, request, code: str):
-        return self._run(lambda inst: asdict(inst.install(code)))
+        return self._run(request, lambda inst: asdict(inst.install(code)))
 
     @action(detail=True, methods=["post"])
     def uninstall(self, request, code: str):
-        return self._run(lambda inst: inst.uninstall(code) or {"uninstalled": code})
+        return self._run(request, lambda inst: inst.uninstall(code) or {"uninstalled": code})
 
     @action(detail=True, methods=["post"])
     def upgrade(self, request, code: str):
-        return self._run(lambda inst: inst.upgrade(code) or {"upgraded": code})
+        return self._run(request, lambda inst: inst.upgrade(code) or {"upgraded": code})
 
-    def _run(self, fn):
+    def _run(self, request, fn):
+        # Installing or removing a module changes what everyone can do: it
+        # was open to anyone signed in, a technician included.
+        from rest_framework.exceptions import PermissionDenied
+
+        from modules.security.infrastructure.access import build_actor
+
+        if not build_actor(request.user, request.company_id).has("core.manage_modules"):
+            raise PermissionDenied("Falta el permiso core.manage_modules")
         try:
             return Response(fn(build_installer()))
         except DomainError as exc:
             return Response(
-                {"type": exc.code, "title": str(exc), "status": 409},
+                {"type": exc.code, "title": _explain(exc), "status": 409},
                 status=status.HTTP_409_CONFLICT,
             )
+
+
+def _explain(exc: DomainError) -> str:
+    """The refusal in the words of the Aplicaciones screen: module names, not
+    codes, and what to do about it."""
+    from modules.core.domain.errors import ModuleInUse
+    from modules.core.infrastructure.discovery import discover_manifests
+
+    names = {manifest.code: manifest.name for manifest in discover_manifests()}
+    if isinstance(exc, ModuleInUse):
+        module = names.get(exc.module_code, exc.module_code)
+        if exc.blockers == ("core module",):
+            return f"«{module}» es parte del núcleo del sistema y no se puede desinstalar."
+        blockers = ", ".join(f"«{names.get(code, code)}»" for code in exc.blockers)
+        return f"No se puede desinstalar «{module}»: lo necesitan {blockers}. Desinstálalos primero."
+    return str(exc)
 
 
 class BootstrapView(APIView):

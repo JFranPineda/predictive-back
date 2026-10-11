@@ -14,6 +14,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from modules.assets.infrastructure.visibility import within_reach
 from modules.reports.infrastructure.builders import build_corrective, build_end, build_monthly, build_mpd
 from modules.reports.infrastructure.render import respond
 from modules.security.infrastructure.access import build_actor
@@ -105,7 +106,8 @@ class ReportOrdersView(_ReportView):
         )
         trains: dict[int, list] = {}
         for order_id, group_id, name in (
-            ServiceVisit.objects.for_company(request.company_id)
+            within_reach(request, ServiceVisit.objects.for_company(request.company_id),
+                         "equipment__asset_group__sector__area_id")
             .filter(service_order__in=orders)
             .values_list("service_order_id", "equipment__asset_group_id", "equipment__asset_group__name")
             .distinct()

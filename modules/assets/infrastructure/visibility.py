@@ -30,3 +30,13 @@ def find_visible_equipment(request, equipment_id):
         .select_related("asset_group__sector__area")
         .filter(id=equipment_id),
     ).first()
+
+
+def within_reach(request, queryset, area_path: str):
+    """Any queryset narrowed to the reader's areas, given the lookup from its
+    rows to an area id (`"point__equipment__asset_group__sector__area_id"`).
+    For the lists that are not machines: spectra, media, report rows."""
+    actor = build_actor(request.user, request.company_id)
+    if actor.area_ids is None:
+        return queryset
+    return queryset.filter(**{f"{area_path}__in": actor.area_ids})

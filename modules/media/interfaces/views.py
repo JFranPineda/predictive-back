@@ -47,6 +47,7 @@ class MediaCollectionView(APIView):
             queryset = queryset.filter(owner_type=owner_type, owner_id=owner_id)
         if request.query_params.get("kind"):
             queryset = queryset.filter(kind=request.query_params["kind"])
+        queryset = _reachable(request, queryset)
         rows, next_cursor = _page(queryset, request)
         backend = store()
         rights = _rights(request, rows)
@@ -264,3 +265,22 @@ def _visits_of(rows) -> dict:
             "id", "visited_at", "service_order__code", "service_order__technique__code"
         )
     }
+
+
+def _reachable(request, queryset):
+    """A user narrowed to some areas sees the pictures of their machines and
+    trains only: the list answered any owner's photos to anyone."""
+    actor = build_actor(request.user, request.company_id)
+    if actor.area_ids is None:
+        return queryset
+    from django.db.models import Q
+
+    from modules.assets.models import AssetGroup, Equipment
+
+    machines = Equipment.objects.for_company(request.company_id).filter(
+        asset_group__sector__area_id__in=actor.area_ids
+    ).values("id")
+    trains = AssetGroup.objects.for_company(request.company_id).filter(
+        sector__area_id__in=actor.area_ids
+    ).values("id")
+    return queryset.filter(Q(equipment_ref__in=machines) | Q(owner_type="group", owner_id__in=trains))

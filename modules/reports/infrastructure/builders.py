@@ -13,6 +13,7 @@ from datetime import date
 from django.utils import timezone
 from rest_framework.exceptions import NotFound, ValidationError
 
+from modules.assets.infrastructure.visibility import within_reach
 from modules.reports.domain.pareto import columns, label_for, pareto, shown_states, state_for
 from modules.reports.domain.trend_svg import PALETTE, trend_svg
 from modules.reports.infrastructure.images import embedded, logo
@@ -99,12 +100,11 @@ def build_mpd(request, order_id: int, group_id: int) -> dict:
         .filter(id=order_id)
         .first()
     )
-    group = (
-        AssetGroup.objects.for_company(request.company_id)
-        .select_related("sector__area")
-        .filter(id=group_id)
-        .first()
-    )
+    group = within_reach(
+        request,
+        AssetGroup.objects.for_company(request.company_id).select_related("sector__area").filter(id=group_id),
+        "sector__area_id",
+    ).first()
     if order is None or group is None:
         raise NotFound("Esa orden o ese conjunto no existen")
     visits = list(
@@ -383,8 +383,11 @@ def build_end(request, order_id: int) -> dict:
         raise ValidationError("El informe END es para órdenes de ensayos no destructivos")
     language = getattr(request, "language", "es")
     visits = list(
-        ServiceVisit.objects.for_company(request.company_id)
-        .filter(service_order=order)
+        within_reach(
+            request,
+            ServiceVisit.objects.for_company(request.company_id).filter(service_order=order),
+            "equipment__asset_group__sector__area_id",
+        )
         .select_related("equipment__asset_group")
         .order_by("equipment__asset_group__name", "equipment__order_in_group", "equipment_id")
     )
@@ -545,7 +548,8 @@ def build_monthly(request, plant_id: int, month: str) -> dict:
     language = getattr(request, "language", "es")
 
     visits = list(
-        ServiceVisit.objects.for_company(request.company_id)
+        within_reach(request, ServiceVisit.objects.for_company(request.company_id),
+                     "equipment__asset_group__sector__area_id")
         .filter(
             equipment__asset_group__sector__area__plant=plant,
             visited_at__date__gte=start, visited_at__date__lte=end,
@@ -641,7 +645,9 @@ def build_corrective(request, start: date, end: date) -> dict:
     names = dict(WorkRecord.WORK_TYPES)
     rows = []
     for row in (
-        WorkRecord.objects.for_company(request.company_id)
+        within_reach(
+            request, WorkRecord.objects.for_company(request.company_id), "asset_group__sector__area_id"
+        )
         .filter(is_closed=True, shift_date__gte=start, shift_date__lte=end)
         .select_related("asset_group", "equipment")
         .prefetch_related("responsibles__user")
