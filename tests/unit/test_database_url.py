@@ -60,6 +60,13 @@ class TestSqlite:
         # A persistent sqlite connection across threads is a locked database.
         assert parse("sqlite:///demo.db").as_django()["CONN_MAX_AGE"] == 0
 
+    def test_sqlite_waits_its_turn_to_write(self):
+        # DEFERRED transactions fail at once with "database is locked" when
+        # two requests read and then write at the same time.
+        options = parse("sqlite:///demo.db").as_django()["OPTIONS"]
+        assert options["transaction_mode"] == "IMMEDIATE"
+        assert "journal_mode=WAL" in options["init_command"]
+
 
 class TestRejections:
     @pytest.mark.parametrize("url", ["", "not-a-url", "/var/lib/db"])

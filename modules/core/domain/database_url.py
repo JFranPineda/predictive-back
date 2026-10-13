@@ -18,6 +18,19 @@ ENGINES = {
     "mysql": "django.db.backends.mysql",
 }
 
+# How every SQLite file is opened. A request reads, then writes, inside one
+# transaction; with SQLite's default (DEFERRED) the write has to upgrade the
+# lock, and when another request is writing at that moment SQLite refuses at
+# once — "database is locked" on registering a service while someone else
+# saved. IMMEDIATE takes the write lock up front and waits its turn instead;
+# WAL lets readers and the writer work at the same time; the timeout is how
+# long a request waits for its turn.
+SQLITE_OPTIONS = {
+    "transaction_mode": "IMMEDIATE",
+    "timeout": 20,
+    "init_command": "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL",
+}
+
 # Query parameters that belong in the driver's OPTIONS rather than at top level.
 DRIVER_OPTIONS = frozenset({"sslmode", "sslrootcert", "sslcert", "sslkey", "connect_timeout",
                             "application_name", "options", "target_session_attrs"})
@@ -50,7 +63,7 @@ class DatabaseConfig:
             "PASSWORD": self.password,
             "HOST": self.host,
             "PORT": self.port,
-            "OPTIONS": dict(self.options),
+            "OPTIONS": dict(SQLITE_OPTIONS) if self.is_sqlite else dict(self.options),
             "ATOMIC_REQUESTS": False,
             "AUTOCOMMIT": True,
             "TIME_ZONE": None,
