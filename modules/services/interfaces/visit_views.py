@@ -21,7 +21,7 @@ from modules.measurements.domain.axes import axis_rank
 from modules.measurements.models import Reading
 from modules.security.domain.policies import can_edit_visit, can_view_visit, can_write_log_entry
 from modules.security.infrastructure.access import build_actor
-from modules.services.infrastructure.visit_refs import visit_ref
+from modules.services.infrastructure.visit_refs import train_visits, visit_ref
 from modules.services.models import ServiceVisit
 
 
@@ -110,9 +110,11 @@ class VisitDetailView(APIView):
                 "sector": equipment.asset_group.sector.name,
             },
             "service_order": {
+                "id": visit.service_order_id,
                 "code": visit.service_order.code,
                 "client_work_order": visit.service_order.client_work_order,
             },
+            "train": train_visits(visit),
             "technique_code": visit.service_order.technique.code,
             "technique_name": visit.service_order.technique.translated("name", language),
             "evidence_only": visit.service_order.technique.evidence_only,

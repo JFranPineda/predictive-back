@@ -39,3 +39,33 @@ def visit_refs(company_id: int, visit_ids: Iterable[int]) -> dict[int, VisitRef]
         .prefetch_related("participants")
     )
     return {visit.id: visit_ref(visit) for visit in visits}
+
+
+def train_of(equipment):
+    """The machines measured together with this one, in the train's order.
+    Retired ones are not measured any more."""
+    from modules.assets.models import Equipment
+
+    return Equipment.objects.filter(
+        asset_group_id=equipment.asset_group_id, retired_at__isnull=True
+    ).order_by("order_in_group", "id")
+
+
+def train_visits(visit: ServiceVisit) -> list[dict]:
+    """Each machine of the visit's train with its visit on the same order, if
+    it has one: the round is one train, the visits are one per machine."""
+    machines = list(train_of(visit.equipment))
+    visits = dict(
+        ServiceVisit.objects.filter(
+            service_order_id=visit.service_order_id, equipment__in=machines
+        ).order_by("id").values_list("equipment_id", "id")
+    )
+    return [
+        {
+            "equipment_id": machine.id,
+            "tag": machine.client_tag or machine.asset_code,
+            "name": machine.name,
+            "visit_id": visit.id if machine.id == visit.equipment_id else visits.get(machine.id),
+        }
+        for machine in machines
+    ]

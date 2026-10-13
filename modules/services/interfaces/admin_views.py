@@ -29,7 +29,7 @@ from modules.security.domain.policies import (
 from modules.security.infrastructure.access import build_actor
 from modules.services.domain.order_status import CANCELLED, PLANNED, can_transition
 from modules.services.infrastructure.order_queries import analysts_of
-from modules.services.infrastructure.visit_refs import visit_ref
+from modules.services.infrastructure.visit_refs import train_of, visit_ref
 from modules.services.interfaces.visit_views import _load
 from modules.services.models import ServiceOrder, ServiceProvider, ServiceVisit, VisitParticipant
 
@@ -212,26 +212,23 @@ class VisitCollectionView(ServiceAdminView):
         instrument = Instrument.objects.for_company(request.company_id).filter(
             id=request.data.get("instrument")
         ).first()
-        visit = ServiceVisit.objects.create(
-            company_id=request.company_id,
-            service_order=order,
-            equipment=equipment,
-            visited_at=request.data.get("visited_at") or timezone.now(),
-            instrument=instrument,
-            duration_min=request.data.get("duration_min") or None,
-        )
-        # Whoever opens a visit is working it; without a participant nobody
-        # could edit what they just created.
-        VisitParticipant.objects.create(visit=visit, user=request.user, role="lead_analyst")
-
-        if request.data.get("create_readings", True):
-            _seed_readings(visit, equipment, request.company_id)
+        visit = _open_visit(request, order, equipment, instrument)
+        # A round measures the whole train — motor and compressor — so the
+        # rest of it can be opened in the same step. Machines that already
+        # have a visit on this order keep theirs.
+        opened = 1
+        if request.data.get("whole_train"):
+            for sibling in train_of(equipment).exclude(id=equipment.id):
+                if not ServiceVisit.objects.filter(service_order=order, equipment=sibling).exists():
+                    _open_visit(request, order, sibling, instrument)
+                    opened += 1
 
         warning = None
         if order.technique.code == "oil_analysis" and equipment.lubrication_type == "grease":
             warning = "Este equipo está registrado con grasa, no aceite"
         return Response(
-            {"visit_id": visit.id, "equipment": equipment.name, "warning": warning}, status=201
+            {"visit_id": visit.id, "equipment": equipment.name, "warning": warning, "opened": opened},
+            status=201,
         )
 
 
@@ -356,6 +353,23 @@ class LogEntryDetailView(ServiceAdminView):
             # Each line keeps its author; rewriting somebody else's conclusion
             # is how a report stops being trustworthy.
             raise PermissionDenied("Esa anotación la escribió otra persona")
+
+
+def _open_visit(request, order: ServiceOrder, equipment: Equipment, instrument) -> ServiceVisit:
+    visit = ServiceVisit.objects.create(
+        company_id=request.company_id,
+        service_order=order,
+        equipment=equipment,
+        visited_at=request.data.get("visited_at") or timezone.now(),
+        instrument=instrument,
+        duration_min=request.data.get("duration_min") or None,
+    )
+    # Whoever opens a visit is working it; without a participant nobody
+    # could edit what they just created.
+    VisitParticipant.objects.create(visit=visit, user=request.user, role="lead_analyst")
+    if request.data.get("create_readings", True):
+        _seed_readings(visit, equipment, request.company_id)
+    return visit
 
 
 def _seed_readings(visit: ServiceVisit, equipment: Equipment, company_id: int) -> None:
