@@ -136,6 +136,11 @@ start() {
 }
 
 stop() {
+  # The renewal service too, if a check was cut short before stopping it.
+  if [[ -f "$STATE/renewal.pid" ]]; then
+    kill -TERM -- "-$(cat "$STATE/renewal.pid")" 2>/dev/null || kill "$(cat "$STATE/renewal.pid")" 2>/dev/null || true
+    rm -f "$STATE/renewal.pid"
+  fi
   [[ -f "$STATE/api.pid" ]] || return 0
   local pid
   pid="$(cat "$STATE/api.pid")"
