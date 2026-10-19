@@ -8,7 +8,6 @@ is retired, never deleted: its thicknesses belong to orders already reported.
 
 from __future__ import annotations
 
-from django.conf import settings
 from django.db.models import Count
 from django.utils import timezone
 from django.utils.text import slugify
@@ -184,13 +183,14 @@ def _ensure_plan_room(request, adding: int) -> None:
         return
     from modules.assets.infrastructure.plan_counts import equipment_in_plan
     from modules.licensing.application.license_service import PlanLimitReachedError, ensure_room
+    from modules.licensing.infrastructure.keys import trusted_keys
 
     try:
         ensure_room(
             tenant.code,
             "equipment",
             equipment_in_plan(request.company_id),
-            secret=settings.LICENSE_SECRET,
+            keys=trusted_keys(),
             adding=adding,
         )
     except PlanLimitReachedError as cause:

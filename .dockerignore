@@ -1,0 +1,13 @@
+# The image carries the program, never what surrounds it on a developer's
+# machine: credentials (.env, which may hold the v1 licence secret), customer
+# data, and the on-premise bench with its throwaway signing key.
+.env
+data/
+.onprem-test/
+**/*.pem
+.venv/
+.git/
+**/__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/

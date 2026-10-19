@@ -101,9 +101,15 @@ TENANT_CONN_MAX_AGE = int(os.environ.get("TENANT_CONN_MAX_AGE", "60"))
 DEFAULT_TENANT = os.environ.get("DEFAULT_TENANT", "")
 BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "")
 
-# Signs and verifies licence tokens. Verification happens on our servers only,
-# so a shared secret is enough; it must never ship to a customer.
-LICENSE_SECRET = os.environ.get("LICENSE_SECRET", "dev-license-secret")
+# Licences verify with the public half of our Ed25519 key, which ships with the
+# program and is never read from the environment.
+from modules.licensing.domain import signing_key as _signing_key  # noqa: E402
+
+LICENSE_PUBLIC_KEY = _signing_key.PUBLIC_KEY
+
+# v1 (HMAC) tokens, only while the move to v2 lasts. Empty refuses them: a
+# default here would be a published secret anyone could sign with.
+LICENSE_SECRET = os.environ.get("LICENSE_SECRET", "")
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (

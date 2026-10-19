@@ -254,11 +254,10 @@ class Command(BaseCommand):
     def _ensure_plan_room(self, company, books) -> None:
         """Checked before any machine is written: a plant the licence cannot
         hold loads none of it (V3-36)."""
-        from django.conf import settings
-
         from modules.assets.infrastructure.plan_counts import equipment_in_plan
         from modules.licensing.application.license_service import PlanLimitReachedError, ensure_room
         from modules.licensing.infrastructure.context import current_tenant
+        from modules.licensing.infrastructure.keys import trusted_keys
 
         existing = set(Equipment.objects.filter(company=company).values_list("asset_group__code", "name"))
         adding = sum(1 for book in books for name in book.components() if (book.code, name) not in existing)
@@ -269,7 +268,7 @@ class Command(BaseCommand):
                 current_tenant(),
                 "equipment",
                 equipment_in_plan(company.id),
-                secret=settings.LICENSE_SECRET,
+                keys=trusted_keys(),
                 adding=adding,
             )
         except PlanLimitReachedError as cause:

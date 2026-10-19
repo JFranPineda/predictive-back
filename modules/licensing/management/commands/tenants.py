@@ -3,7 +3,8 @@
     tenants list
     tenants add ambev "AMBEV Perú" --url postgres://… --deployment on_premise
     tenants migrate ambev
-    tenants issue ambev --plan enterprise --months 12 --equipment 600
+    tenants issue ambev --signing-key ~/claves/predictive-signing.pem --plan enterprise --months 12
+    tenants reissue ambev --signing-key ~/claves/predictive-signing.pem
     tenants revoke ambev --reason "contrato terminado"
     tenants run ambev <command> [args…]
 """
@@ -11,30 +12,38 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import sys
 import uuid
 from datetime import UTC, date, datetime
 
-from django.conf import settings
 from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError
 
+from modules.licensing.application.license_service import latest_record
 from modules.licensing.application.tenant_resolver import resolve
 from modules.licensing.domain.license import (
+    TOKEN_VERSION,
     License,
+    LicenseError,
     LicenseLimits,
     database_fingerprint,
     issue,
+    token_version,
+    verify,
 )
+from modules.licensing.domain.signing import SigningKeyError
 from modules.licensing.infrastructure.context import use_tenant
+from modules.licensing.infrastructure.keys import trusted_keys
 from modules.licensing.infrastructure.models import LicenseEvent, LicenseRecord, Tenant
+from modules.licensing.infrastructure.signing_key_file import load_signing_key
 
 
 class Command(BaseCommand):
     help = "Manage customer installations and their licences"
 
     def add_arguments(self, parser):
-        parser.add_argument("action", choices=["list", "add", "migrate", "issue", "revoke", "run"])
+        parser.add_argument("action", choices=["list", "add", "migrate", "issue", "reissue", "revoke", "run"])
         parser.add_argument("code", nargs="?")
         parser.add_argument("name", nargs="?")
         # `run` forwards the inner command's own flags, so its tail must be
@@ -52,6 +61,8 @@ class Command(BaseCommand):
         parser.add_argument("--users", type=int)
         parser.add_argument("--modules", default="")
         parser.add_argument("--reason", default="")
+        parser.add_argument("--signing-key", help="the encrypted signing key (issue, reissue)")
+        parser.add_argument("--password-file", help="read its password from this file instead of asking")
 
     def handle(self, *args, **options):
         getattr(self, f"_{options['action']}")(options)
@@ -62,7 +73,7 @@ class Command(BaseCommand):
             # revoked licence while the API is happily serving the new one.
             latest = tenant.licenses.order_by("-valid_until", "-created_at").first()
             licence = (
-                f"{latest.plan} hasta {latest.valid_until}"
+                f"{latest.plan} hasta {latest.valid_until} · v{token_version(latest.token) or '?'}"
                 + (" (REVOCADA)" if latest.is_revoked else "")
                 if latest
                 else "sin licencia"
@@ -109,7 +120,7 @@ class Command(BaseCommand):
             plan=options["plan"],
             issued_at=today,
             valid_until=until,
-            license_id=f"lic-{uuid.uuid4().hex[:12]}",
+            license_id=_new_license_id(),
             grace_days=options["grace"],
             limits=LicenseLimits(
                 max_plants=options["plants"],
@@ -119,20 +130,54 @@ class Command(BaseCommand):
             modules=tuple(filter(None, options["modules"].split(","))),
             database_fingerprint=tenant.database_fingerprint,
         )
-        token = issue(license_, settings.LICENSE_SECRET)
-        LicenseRecord.objects.create(
-            tenant=tenant, license_id=license_.license_id, token=token, plan=license_.plan,
-            issued_at=today, valid_until=until, grace_days=license_.grace_days,
-            modules=list(license_.modules),
-            limits={
-                "max_plants": options["plants"],
-                "max_equipment": options["equipment"],
-                "max_users": options["users"],
-            },
-        )
-        LicenseEvent.objects.create(tenant=tenant, kind="issued", detail=f"{license_.plan} → {until}")
+        token = self._sign(license_, options)
+        _store(tenant, license_, token, f"{license_.plan} → {until}")
         self.stdout.write(self.style.SUCCESS(f"licencia {license_.license_id} válida hasta {until}"))
         self.stdout.write(token)
+
+    def _reissue(self, options):
+        """The licence in force, same terms, signed as v2. The old record
+        stays: it is history, and the newer one is what enforcement reads."""
+        code, _ = self._require(options)
+        record = latest_record(code)
+        if record is None:
+            raise CommandError(f"'{code}' no tiene licencia que reemitir")
+        if record.is_revoked:
+            # Reissuing a revoked licence would bring it back.
+            raise CommandError(f"la licencia vigente de '{code}' está revocada: emite una nueva")
+        if token_version(record.token) == TOKEN_VERSION:
+            self.stdout.write(f"{record.license_id} ya es v{TOKEN_VERSION}: nada que reemitir")
+            return
+        try:
+            current = verify(record.token, trusted_keys())
+        except LicenseError as exc:
+            raise CommandError(f"la licencia vigente no verifica ({exc}): no se reemite") from exc
+
+        license_ = dataclasses.replace(current, license_id=_new_license_id())
+        token = self._sign(license_, options)
+        _store(record.tenant, license_, token,
+               f"reemitida v{TOKEN_VERSION} de {record.license_id}: {license_.plan} → {license_.valid_until}")
+        self.stdout.write(self.style.SUCCESS(
+            f"licencia {license_.license_id} (v{TOKEN_VERSION}) reemplaza a {record.license_id}, "
+            f"válida hasta {license_.valid_until}"
+        ))
+
+    def _sign(self, license_: License, options) -> str:
+        """Refuses a key whose public half this program does not ship: the
+        licence would be stored and never verify."""
+        if not options["signing_key"]:
+            raise CommandError("--signing-key is required to sign a licence")
+        try:
+            token = issue(license_, load_signing_key(options["signing_key"], options["password_file"]))
+        except SigningKeyError as exc:
+            raise CommandError(str(exc)) from exc
+        try:
+            verify(token, trusted_keys())
+        except LicenseError as exc:
+            raise CommandError(
+                "esta clave de firma no corresponde a la clave pública que verifica este programa"
+            ) from exc
+        return token
 
     def _revoke(self, options):
         code, _ = self._require(options)
@@ -160,6 +205,25 @@ class Command(BaseCommand):
         if need_name and not name:
             raise CommandError("a name is required")
         return code, name
+
+
+def _new_license_id() -> str:
+    return f"lic-{uuid.uuid4().hex[:12]}"
+
+
+def _store(tenant: Tenant, license_: License, token: str, detail: str) -> None:
+    LicenseRecord.objects.create(
+        tenant=tenant, license_id=license_.license_id, token=token, plan=license_.plan,
+        issued_at=license_.issued_at, valid_until=license_.valid_until, grace_days=license_.grace_days,
+        modules=list(license_.modules),
+        limits={
+            "max_plants": license_.limits.max_plants,
+            "max_equipment": license_.limits.max_equipment,
+            "max_users": license_.limits.max_users,
+            "max_external_users": license_.limits.max_external_users,
+        },
+    )
+    LicenseEvent.objects.create(tenant=tenant, kind="issued", detail=detail[:300])
 
 
 def _describe(url: str) -> tuple[str, str]:

@@ -18,3 +18,5 @@ data/backups/
 .onprem-test/
 /media/
 /staticfiles/
+# Licence signing keys live outside the repository; a stray one never gets in.
+*.pem

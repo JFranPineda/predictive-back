@@ -495,18 +495,17 @@ class Command(BaseCommand):
     def _ensure_plan_room(self, company, adding: int) -> None:
         """Checked before writing anything: a load the plan cannot hold creates
         none of its machines (V3-36)."""
-        from django.conf import settings
-
         from modules.assets.infrastructure.plan_counts import equipment_in_plan
         from modules.licensing.application.license_service import PlanLimitReachedError, ensure_room
         from modules.licensing.infrastructure.context import current_tenant
+        from modules.licensing.infrastructure.keys import trusted_keys
 
         tenant = current_tenant()
         if not tenant:
             return
         try:
             ensure_room(tenant, "equipment", equipment_in_plan(company.id),
-                        secret=settings.LICENSE_SECRET, adding=adding)
+                        keys=trusted_keys(), adding=adding)
         except PlanLimitReachedError as cause:
             raise CommandError(str(cause)) from cause
 

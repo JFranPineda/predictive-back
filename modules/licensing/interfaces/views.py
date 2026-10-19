@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from django.conf import settings
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.licensing.application.license_service import current_verdict
+from modules.licensing.infrastructure.keys import trusted_keys
 
 
 class LicenseStatusView(APIView):
@@ -19,7 +19,7 @@ class LicenseStatusView(APIView):
         if tenant is None:
             return Response({"status": "unknown"}, status=400)
         verdict = current_verdict(
-            tenant.code, secret=settings.LICENSE_SECRET, suspended=tenant.is_suspended
+            tenant.code, keys=trusted_keys(), suspended=tenant.is_suspended
         )
         return Response(
             {

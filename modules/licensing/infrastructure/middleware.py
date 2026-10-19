@@ -12,6 +12,7 @@ from django.http import JsonResponse
 from modules.licensing.application.license_service import current_verdict
 from modules.licensing.application.tenant_resolver import UnknownTenant, resolve, tenant_from_host
 from modules.licensing.infrastructure.context import set_current_tenant
+from modules.licensing.infrastructure.keys import trusted_keys
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
@@ -66,7 +67,7 @@ class LicenseMiddleware:
 
         verdict = current_verdict(
             tenant.code,
-            secret=settings.LICENSE_SECRET,
+            keys=trusted_keys(),
             suspended=tenant.is_suspended,
         )
         request.license = verdict

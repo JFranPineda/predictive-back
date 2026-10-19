@@ -6,7 +6,6 @@ parent belongs to the caller's company, and the licence still has room.
 
 from __future__ import annotations
 
-from django.conf import settings
 from django.db.models import ProtectedError
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -49,12 +48,13 @@ def _check_licence(request, resource: str, current_count: int, adding: int = 1) 
     """A plan sells a ceiling; this is where growth stops at it. The refusal
     is audited: the administrator asks "why could we not add it" later."""
     from modules.licensing.application.license_service import PlanLimitReachedError, ensure_room
+    from modules.licensing.infrastructure.keys import trusted_keys
 
     tenant = getattr(request, "tenant", None)
     if tenant is None:
         return
     try:
-        ensure_room(tenant.code, resource, current_count, secret=settings.LICENSE_SECRET, adding=adding)
+        ensure_room(tenant.code, resource, current_count, keys=trusted_keys(), adding=adding)
     except PlanLimitReachedError as cause:
         record(request, "license.limit_reached", object_type=resource,
                after={"used": current_count, "adding": adding})

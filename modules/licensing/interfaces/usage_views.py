@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from django.conf import settings
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from modules.licensing.application.license_service import plan_usage
+from modules.licensing.infrastructure.keys import trusted_keys
 
 
 class LicenseUsageView(APIView):
@@ -24,7 +24,7 @@ class LicenseUsageView(APIView):
             "plants": plants_in_plan(request.company_id),
         }
         rows = [
-            plan_usage(tenant.code, resource, used, secret=settings.LICENSE_SECRET)
+            plan_usage(tenant.code, resource, used, keys=trusted_keys())
             for resource, used in counts.items()
         ]
         return Response({

@@ -1,23 +1,62 @@
-"""The key that ties a customer's on-premise database to our hosted system."""
+"""The licence: signed by us, verified wherever the program runs."""
 
+import base64
+import hashlib
+import hmac
+import json
 from datetime import date
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 
 from modules.licensing.domain.license import (
     BadSignature,
     License,
+    LicenseError,
     LicenseLimits,
     LicenseStatus,
     MalformedToken,
+    TrustedKeys,
     check_limit,
     database_fingerprint,
     evaluate,
     issue,
+    token_version,
     verify,
 )
+from modules.licensing.domain.signing import (
+    SigningKeyError,
+    decrypt_signing_key,
+    encrypt_signing_key,
+    generate_signing_key,
+    public_key_text,
+)
 
+SIGNING_KEY = generate_signing_key()
+KEYS = TrustedKeys(public_key=public_key_text(SIGNING_KEY))
+PASSWORD = "a-passphrase-long-enough"
+
+# The v1 secret, and a token the HMAC code minted with it before v2 existed.
 SECRET = "server-side-secret-never-shipped-to-a-customer"
+V1_TOKEN = (
+    "eyJmaW5nZXJwcmludCI6ImZwLWFtYmV2IiwiZ3JhY2UiOjE1LCJpZCI6ImxpYy0wMDAxIiwiaXNzdWVkIjoiMjAyNi0w"
+    "MS0wMSIsImxpbWl0cyI6eyJtYXhfZXF1aXBtZW50Ijo2MDAsIm1heF9leHRlcm5hbF91c2VycyI6MTAsIm1heF9wbGFu"
+    "dHMiOjIsIm1heF91c2VycyI6MjV9LCJtb2R1bGVzIjpbImNvcmUiLCJhc3NldHMiLCJtZWFzdXJlbWVudHMiLCJ2aWJy"
+    "YXRpb24iLCJ0aGVybW9ncmFwaHkiXSwicGxhbiI6ImVudGVycHJpc2UiLCJ0ZW5hbnQiOiJhbWJldiIsInVudGlsIjoi"
+    "MjAyNi0xMi0zMSIsInYiOjF9.uru_6lH0bpKPBapxt9GjM5wJ7plHbSsBYnpbF2FLjwQ"
+)
+
+
+def _encode(payload: dict) -> str:
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _payload(token: str) -> dict:
+    body = token.partition(".")[0]
+    return json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+
 
 AMBEV = License(
     tenant_code="ambev",
@@ -33,30 +72,111 @@ AMBEV = License(
 
 
 class TestToken:
-    def test_a_token_round_trips(self):
-        restored = verify(issue(AMBEV, SECRET), SECRET)
-        assert restored == AMBEV
+    def test_a_token_round_trips_with_only_the_public_key(self):
+        assert verify(issue(AMBEV, SIGNING_KEY), KEYS) == AMBEV
+
+    def test_a_new_token_is_version_2(self):
+        assert token_version(issue(AMBEV, SIGNING_KEY)) == 2
 
     def test_a_tampered_payload_is_rejected(self):
-        token = issue(AMBEV, SECRET)
-        body, _, signature = token.partition(".")
-        forged = f"{body[:-4]}AAAA.{signature}"
-        with pytest.raises((BadSignature, MalformedToken)):
-            verify(forged, SECRET)
-
-    def test_another_secret_cannot_mint_a_licence(self):
+        signature = issue(AMBEV, SIGNING_KEY).partition(".")[2]
+        payload = _payload(issue(AMBEV, SIGNING_KEY))
+        payload["limits"]["max_equipment"] = 6000
         with pytest.raises(BadSignature):
-            verify(issue(AMBEV, "stolen-guess"), SECRET)
+            verify(f"{_encode(payload)}.{signature}", KEYS)
+
+    def test_a_tampered_signature_is_rejected(self):
+        body, _, signature = issue(AMBEV, SIGNING_KEY).partition(".")
+        flipped = ("A" if signature[0] != "A" else "B") + signature[1:]
+        with pytest.raises(BadSignature):
+            verify(f"{body}.{flipped}", KEYS)
+
+    def test_another_key_cannot_mint_a_licence(self):
+        with pytest.raises(BadSignature):
+            verify(issue(AMBEV, generate_signing_key()), KEYS)
 
     def test_the_signature_is_checked_before_the_payload_is_read(self):
         # Parsing first would let a forged token pick its own plan.
+        forged = _encode({"v": 2, "plan": "enterprise"})
         with pytest.raises(BadSignature):
-            verify("eyJwbGFuIjoiZW50ZXJwcmlzZSJ9.not-a-signature", SECRET)
+            verify(f"{forged}.not-a-signature", KEYS)
+
+    def test_no_installed_public_key_verifies_nothing(self):
+        with pytest.raises(LicenseError):
+            verify(issue(AMBEV, SIGNING_KEY), TrustedKeys(public_key=""))
 
     @pytest.mark.parametrize("token", ["", "no-dot", ".", "abc."])
     def test_garbage_is_refused_without_crashing(self, token):
         with pytest.raises((MalformedToken, BadSignature)):
-            verify(token, SECRET)
+            verify(token, KEYS)
+
+
+class TestTransition:
+    """v1 (HMAC) tokens keep working between reissuing and deploying, and only
+    where the verifier holds the legacy secret."""
+
+    def test_a_v1_token_still_verifies_with_the_legacy_secret(self):
+        keys = TrustedKeys(public_key=KEYS.public_key, legacy_secret=SECRET)
+        assert token_version(V1_TOKEN) == 1
+        assert verify(V1_TOKEN, keys) == AMBEV
+
+    def test_without_the_legacy_secret_no_v1_token_verifies(self):
+        # An empty HMAC key is one anyone can compute: no secret, no v1.
+        body = V1_TOKEN.partition(".")[0]
+        anyones = base64.urlsafe_b64encode(hmac.new(b"", body.encode(), hashlib.sha256).digest())
+        with pytest.raises(BadSignature):
+            verify(f"{body}.{anyones.decode().rstrip('=')}", KEYS)
+        with pytest.raises(BadSignature):
+            verify(V1_TOKEN, KEYS)
+
+    def test_a_v1_token_from_another_secret_is_refused(self):
+        with pytest.raises(BadSignature):
+            verify(V1_TOKEN, TrustedKeys(public_key=KEYS.public_key, legacy_secret="stolen-guess"))
+
+    @pytest.mark.parametrize("version", [3, 0, None, "2", True])
+    def test_an_unknown_version_is_malformed(self, version):
+        # `True == 1` in Python: only the integers on the list are versions.
+        payload = {**_payload(issue(AMBEV, SIGNING_KEY)), "v": version}
+        keys = TrustedKeys(public_key=KEYS.public_key, legacy_secret=SECRET)
+        with pytest.raises(MalformedToken):
+            verify(f"{_encode(payload)}.c2lnbmF0dXJl", keys)
+
+
+class TestSigningKeyFile:
+    def test_the_file_is_encrypted(self):
+        pem = encrypt_signing_key(SIGNING_KEY, PASSWORD)
+        assert pem.startswith(b"-----BEGIN ENCRYPTED PRIVATE KEY-----")
+        with pytest.raises(TypeError):
+            serialization.load_pem_private_key(pem, password=None)
+
+    def test_the_right_password_opens_it(self):
+        restored = decrypt_signing_key(encrypt_signing_key(SIGNING_KEY, PASSWORD), PASSWORD)
+        assert public_key_text(restored) == KEYS.public_key
+
+    def test_a_wrong_password_says_so(self):
+        pem = encrypt_signing_key(SIGNING_KEY, PASSWORD)
+        with pytest.raises(SigningKeyError, match="contraseña"):
+            decrypt_signing_key(pem, "not-the-passphrase-at-all")
+
+    def test_an_unencrypted_key_is_refused(self):
+        pem = SIGNING_KEY.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        )
+        with pytest.raises(SigningKeyError, match="cifrad"):
+            decrypt_signing_key(pem, PASSWORD)
+
+    def test_a_short_password_is_refused(self):
+        with pytest.raises(SigningKeyError, match="16"):
+            encrypt_signing_key(SIGNING_KEY, "too-short")
+
+    def test_a_key_of_another_kind_is_refused(self):
+        # An SSH or TLS key picked by mistake: say so, do not crash at signing.
+        other = ec.generate_private_key(ec.SECP256R1()).private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+            serialization.BestAvailableEncryption(PASSWORD.encode()),
+        )
+        with pytest.raises(SigningKeyError, match="Ed25519"):
+            decrypt_signing_key(other, PASSWORD)
 
 
 class TestLifecycle:

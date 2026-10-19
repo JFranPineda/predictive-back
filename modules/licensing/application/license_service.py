@@ -20,6 +20,7 @@ from modules.licensing.domain.license import (
     LicenseError,
     LicenseStatus,
     LicenseVerdict,
+    TrustedKeys,
     evaluate,
     verify,
 )
@@ -30,15 +31,15 @@ from modules.licensing.domain.usage import Usage, limit_message
 EVENT_THROTTLE = timedelta(hours=1)
 
 
-def current_verdict(tenant_code: str, *, secret: str, suspended: bool = False) -> LicenseVerdict:
+def current_verdict(tenant_code: str, *, keys: TrustedKeys, suspended: bool = False) -> LicenseVerdict:
     from modules.licensing.infrastructure.models import Tenant
 
-    record = _latest_record(tenant_code)
+    record = latest_record(tenant_code)
     if record is None:
         return LicenseVerdict(LicenseStatus.INVALID, True, 0, "no hay licencia para este cliente")
 
     try:
-        license_ = verify(record.token, secret)
+        license_ = verify(record.token, keys)
     except LicenseError as exc:
         _log(tenant_code, "blocked", f"token inválido: {exc}")
         return LicenseVerdict(LicenseStatus.INVALID, True, 0, "licencia no válida")
@@ -67,29 +68,29 @@ class PlanLimitReachedError(Exception):
     """One more would exceed the plan; the message says so in the customer's words."""
 
 
-def plan_usage(tenant_code: str, resource: str, used: int, *, secret: str) -> Usage:
+def plan_usage(tenant_code: str, resource: str, used: int, *, keys: TrustedKeys) -> Usage:
     """How much of the plan is used. No licence on record means no ceiling
     (a development database); an invalid one leaves no room at all."""
-    record = _latest_record(tenant_code)
+    record = latest_record(tenant_code)
     if record is None:
         return Usage(resource, used, None)
     try:
-        license_ = verify(record.token, secret)
+        license_ = verify(record.token, keys)
     except LicenseError:
         return Usage(resource, used, 0)
     return Usage(resource, used, license_.limits.limit_for(resource))
 
 
-def ensure_room(tenant_code: str, resource: str, used: int, *, secret: str, adding: int = 1) -> Usage:
+def ensure_room(tenant_code: str, resource: str, used: int, *, keys: TrustedKeys, adding: int = 1) -> Usage:
     """All or nothing: a load that does not fit whole creates none of it."""
-    usage = plan_usage(tenant_code, resource, used, secret=secret)
+    usage = plan_usage(tenant_code, resource, used, keys=keys)
     if not usage.fits(adding):
         _log(tenant_code, "limit_reached", f"{resource}={used}+{adding}")
         raise PlanLimitReachedError(limit_message(usage, adding))
     return usage
 
 
-def _latest_record(tenant_code: str):
+def latest_record(tenant_code: str):
     from modules.licensing.infrastructure.models import LicenseRecord
 
     # Newest contract first; a revoked one still wins over an older valid one,

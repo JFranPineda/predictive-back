@@ -23,6 +23,7 @@ PG_PORT="${ONPREM_TEST_PG_PORT:-5437}"
 API_PORT="${ONPREM_TEST_API_PORT:-8013}"
 TENANT=ipsa_test
 STATE="$ROOT/.onprem-test"
+KEYS="$STATE/keys"
 PYTHON="${PYTHON:-$ROOT/.venv/bin/python}"
 APP_URL="postgres://predictive_app:onprem-test@127.0.0.1:$PG_PORT"
 COMPOSE=(docker compose -f deploy/onprem-test/compose.yml)
@@ -32,7 +33,13 @@ bench_env() {
   export CONTROL_DATABASE_URL="$APP_URL/predictive_control"
   export DEFAULT_TENANT="$TENANT"
   export SECRET_KEY=onprem-test-only
-  export LICENSE_SECRET=onprem-test-only
+  # The bench signs with its own throwaway key, never ours, and the API holds
+  # only its public half (dev settings read it from here). No v1 secret.
+  export LICENSE_SECRET=
+  if [[ -f "$KEYS/public.key" ]]; then
+    LICENSE_PUBLIC_KEY="$(cat "$KEYS/public.key")"
+    export LICENSE_PUBLIC_KEY
+  fi
   export ALLOWED_HOSTS=127.0.0.1,localhost
   export MEDIA_BACKEND=local
   export MEDIA_ROOT=.onprem-test/media
@@ -53,11 +60,22 @@ manage() {
 
 psql_app() {
   "${COMPOSE[@]}" exec -T -e PGPASSWORD=onprem-test db \
-    psql -h 127.0.0.1 -U predictive_app -d predictive_ipsa_test -tAc "$1"
+    psql -h 127.0.0.1 -U predictive_app -d "${2:-predictive_ipsa_test}" -tAc "$1"
+}
+
+# Encrypted like ours, with a password that exists only in the bench.
+bench_keys() {
+  [[ -f "$KEYS/signing-key.pem" ]] && return
+  mkdir -p "$KEYS"
+  chmod 700 "$KEYS"
+  (umask 077 && "$PYTHON" -c 'import secrets; print(secrets.token_urlsafe(24))' >"$KEYS/password")
+  manage license keygen --signing-key "$KEYS/signing-key.pem" \
+    --password-file "$KEYS/password" --public-key "$KEYS/public.key"
 }
 
 up() {
   mkdir -p "$STATE"
+  bench_keys
   "${COMPOSE[@]}" up -d --wait
   manage migrate --database=default --verbosity 0
   manage tenants add "$TENANT" "IPSA — banco on-premise" \
@@ -66,8 +84,10 @@ up() {
   # No `modules bootstrap` here: on an empty database the auto-installed
   # modules need a catalogue (units, magnitudes, statuses) that only the
   # importer lays down today. `import` runs it after the catalogue exists.
-  if manage tenants list | grep -E " $TENANT " | grep -q "sin licencia"; then
-    manage tenants issue "$TENANT" --plan gestionado --months 3 --grace 30 \
+  # Also when the bench still holds a v1 licence from before Phase 1.
+  if ! manage tenants list | grep -E " $TENANT " | grep -q " v2"; then
+    manage tenants issue "$TENANT" --signing-key "$KEYS/signing-key.pem" \
+      --password-file "$KEYS/password" --plan gestionado --months 3 --grace 30 \
       --equipment 650 --users 40 --plants 1 | head -1
   fi
   manage tenants list
@@ -133,6 +153,9 @@ sys.exit(0 if d.get("status") == "active" and d.get("deployment") == "on_premise
     fail "status/ no responde active: ${body:-sin respuesta}"
   fi
 
+  echo "Firma"
+  signing_checks
+
   echo "Aislamiento"
   code="$(curl -s -o /dev/null -w '%{http_code}' -H "X-Tenant: ambev" "$base/license/status/")"
   if [[ "$code" == "404" ]]; then
@@ -170,6 +193,77 @@ sys.exit(0 if d.get("status") == "active" and d.get("deployment") == "on_premise
   fi
 
   return "$failed"
+}
+
+# Phase 1: the signing key is encrypted and stays out of the API, and the
+# API resolves the licence with the public key alone.
+signing_checks() {
+  local before licences out status pid
+  value="$(head -1 "$KEYS/signing-key.pem" 2>/dev/null || true)"
+  if [[ "$value" == "-----BEGIN ENCRYPTED PRIVATE KEY-----" \
+    && "$(stat -c %a "$KEYS/signing-key.pem")" == "600" ]]; then
+    pass "la clave de firma está cifrada y solo la lee su dueño"
+  else
+    fail "la clave de firma no está cifrada o la leen otros: ${value:-sin archivo}"
+  fi
+
+  before="$(sha256sum "$KEYS/signing-key.pem" 2>/dev/null || true)"
+  if manage license keygen --signing-key "$KEYS/signing-key.pem" --password-file "$KEYS/password" \
+    --public-key "$STATE/overwrite.key" >/dev/null 2>&1 \
+    || [[ "$(sha256sum "$KEYS/signing-key.pem" 2>/dev/null || true)" != "$before" ]]; then
+    fail "keygen pisó una clave de firma existente"
+  else
+    pass "keygen no pisa una clave de firma existente"
+  fi
+  rm -f "$STATE/overwrite.key"
+
+  licences="$(psql_app "select count(*) from licensing_licenserecord" predictive_control || true)"
+  (umask 077 && echo "not-the-bench-password" >"$STATE/wrong-password")
+  out="$(manage tenants issue "$TENANT" --signing-key "$KEYS/signing-key.pem" \
+    --password-file "$STATE/wrong-password" 2>&1)" && status=0 || status=$?
+  rm -f "$STATE/wrong-password"
+  if [[ $status -ne 0 && "$out" == *"contraseña incorrecta"* \
+    && "$(psql_app "select count(*) from licensing_licenserecord" predictive_control)" == "$licences" ]]; then
+    pass "con otra contraseña no se emite nada"
+  else
+    fail "emitir con otra contraseña no falló con claridad (salida $status): ${out:0:200}"
+  fi
+
+  rm -rf "$STATE/foreign" && mkdir -p "$STATE/foreign"
+  (umask 077 && echo "a-foreign-bench-password" >"$STATE/foreign/password")
+  out="$(manage license keygen --signing-key "$STATE/foreign/signing-key.pem" \
+    --password-file "$STATE/foreign/password" --public-key "$STATE/foreign/public.key" 2>&1 \
+    && manage tenants issue "$TENANT" --signing-key "$STATE/foreign/signing-key.pem" \
+      --password-file "$STATE/foreign/password" 2>&1)" && status=0 || status=$?
+  rm -rf "$STATE/foreign"
+  if [[ $status -ne 0 && "$out" == *"no corresponde"* \
+    && "$(psql_app "select count(*) from licensing_licenserecord" predictive_control)" == "$licences" ]]; then
+    pass "una clave de firma ajena a la pública instalada no emite"
+  else
+    fail "una clave ajena emitió o falló sin explicarlo (salida $status): ${out:0:200}"
+  fi
+
+  if manage tenants list | grep -E " $TENANT " | grep -q " v2"; then
+    pass "la licencia vigente de $TENANT es v2 (Ed25519)"
+  else
+    fail "la licencia vigente de $TENANT no es v2"
+  fi
+
+  pid="$(cat "$STATE/api.pid" 2>/dev/null || true)"
+  out="$(tr '\0' '\n' <"/proc/${pid:-0}/environ" 2>/dev/null || true)"
+  if [[ -n "$out" ]] && grep -qE '^LICENSE_PUBLIC_KEY=.+' <<<"$out" \
+    && ! grep -qE '^LICENSE_SECRET=.+' <<<"$out" && ! grep -q 'signing-key' <<<"$out"; then
+    pass "la API resuelve la licencia con la clave pública sola"
+  else
+    fail "la API corre con algo más que la clave pública (o no corre)"
+  fi
+
+  # A PEM block opens its line; a quoted header in a test or here does not.
+  if git -C "$ROOT" grep -qIE '^-----BEGIN [A-Z ]*PRIVATE KEY-----'; then
+    fail "hay una clave privada versionada en el repo"
+  else
+    pass "ninguna clave privada versionada en el repo"
+  fi
 }
 
 down() {

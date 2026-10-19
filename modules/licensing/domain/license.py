@@ -1,20 +1,22 @@
 """Licensing.
 
-The commercial shape this has to support: the customer keeps their data in
-their own database, on their own premises, and the application that gives that
-data any meaning — schema, rules, screens, reports — runs on ours. The licence
-is what ties the two together.
+A licence says which customer may use PREDICTIVE, for which period, with
+which modules and ceilings. It is a signed token: `base64url(payload)` dot
+`base64url(signature)`.
 
 Be honest about what a key does and does not do:
 
-- It **does** stop our hosted application from serving a tenant whose contract
+- It **does** stop the application from serving a tenant whose contract
   ended, and it does it at a single chokepoint instead of in a hundred views.
 - It **does not** encrypt the customer's database. They own those rows and can
-  read them with `psql` any day. What they cannot take is the system: an empty
-  schema without the application is a filing cabinet with no index.
-- Verification runs on **our** servers, never on customer hardware, so a shared
-  secret (HMAC) is enough. Asymmetric signing only buys something when the
-  verifier is in hostile hands — here it would be ceremony.
+  read them with `psql` any day.
+
+Since the application also runs on the customer's server, issuing and
+verifying are separate capabilities (v2): we sign with an Ed25519 key that
+never leaves our issuing machine, and every installation verifies with the
+public half shipped in the program. v1 signed with a shared HMAC secret, which
+would have meant installing the signing credential everywhere; it is accepted
+only while the move to v2 lasts, and only where that secret is configured.
 
 Expiry degrades before it blocks: read-only during the grace period, then
 refusal. Cutting a maintenance team off mid-round because an invoice is three
@@ -30,8 +32,16 @@ import json
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from enum import StrEnum
+from typing import Any
 
-TOKEN_VERSION = 1
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+from modules.licensing.domain.signing import SigningKeyError, load_public_key
+
+TOKEN_VERSION = 2
+LEGACY_TOKEN_VERSION = 1
+SUPPORTED_VERSIONS = (LEGACY_TOKEN_VERSION, TOKEN_VERSION)
 
 
 class LicenseError(Exception):
@@ -108,8 +118,17 @@ class LicenseVerdict:
         )
 
 
-def issue(license_: License, secret: str) -> str:
-    """Mint a token. Runs on our side only; the customer never gets the secret."""
+@dataclass(frozen=True, slots=True)
+class TrustedKeys:
+    """What a verifier holds. Never the signing key."""
+
+    public_key: str
+    # v1 (HMAC) tokens, during the move to v2 only. Empty refuses them.
+    legacy_secret: str = ""
+
+
+def issue(license_: License, signing_key: Ed25519PrivateKey) -> str:
+    """Mint a v2 token. Runs on our issuing machine only."""
     payload = {
         "v": TOKEN_VERSION,
         "id": license_.license_id,
@@ -128,28 +147,80 @@ def issue(license_: License, secret: str) -> str:
         "fingerprint": license_.database_fingerprint,
     }
     body = _b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
-    return f"{body}.{_sign(body, secret)}"
+    return f"{body}.{_b64encode(signing_key.sign(body.encode()))}"
 
 
-def verify(token: str, secret: str) -> License:
+def verify(token: str, keys: TrustedKeys) -> License:
     """Signature first, contents second. Parsing an unverified payload is how
-    a forged token gets to choose its own plan."""
+    a forged token gets to choose its own plan.
+
+    The version is the one field read before the signature, because it picks
+    the algorithm. It cannot buy a weaker check: each version has its own key
+    material, and v1 has none unless the legacy secret is configured."""
+    body, signature = _split(token)
+    version = _version_of(body)
+    if version == TOKEN_VERSION:
+        _check_ed25519(body, signature, keys.public_key)
+    else:
+        _check_hmac(body, signature, keys.legacy_secret)
+    return _license_from(_read(body))
+
+
+def token_version(token: str) -> int | None:
+    """The version a token claims, unverified. For dispatch and for listings."""
+    try:
+        return _version_of(_split(token)[0])
+    except MalformedToken:
+        return None
+
+
+def _split(token: str) -> tuple[str, str]:
     try:
         body, _, signature = token.strip().partition(".")
     except AttributeError as exc:
         raise MalformedToken("token is not a string") from exc
     if not body or not signature:
         raise MalformedToken("token must be <payload>.<signature>")
-    if not hmac.compare_digest(signature, _sign(body, secret)):
-        raise BadSignature("signature does not match")
+    return body, signature
 
+
+def _read(body: str) -> dict[str, Any]:
     try:
         payload = json.loads(_b64decode(body))
     except (ValueError, TypeError) as exc:
         raise MalformedToken("payload is not valid JSON") from exc
-    if payload.get("v") != TOKEN_VERSION:
-        raise MalformedToken(f"unsupported token version {payload.get('v')}")
+    if not isinstance(payload, dict):
+        raise MalformedToken("payload is not an object")
+    return payload
 
+
+def _version_of(body: str) -> int:
+    version = _read(body).get("v")
+    # `True == 1` in Python; a version is an integer on the list, nothing else.
+    if type(version) is not int or version not in SUPPORTED_VERSIONS:
+        raise MalformedToken(f"unsupported token version {version!r}")
+    return version
+
+
+def _check_ed25519(body: str, signature: str, public_key: str) -> None:
+    try:
+        key = load_public_key(public_key)
+    except SigningKeyError as exc:
+        raise BadSignature(str(exc)) from exc
+    try:
+        key.verify(_b64decode(signature), body.encode())
+    except (InvalidSignature, ValueError) as exc:
+        raise BadSignature("signature does not match") from exc
+
+
+def _check_hmac(body: str, signature: str, secret: str) -> None:
+    if not secret:
+        raise BadSignature("v1 tokens need the legacy secret, and none is configured")
+    if not hmac.compare_digest(signature, _hmac(body, secret)):
+        raise BadSignature("signature does not match")
+
+
+def _license_from(payload: dict[str, Any]) -> License:
     limits = payload.get("limits") or {}
     return License(
         tenant_code=payload["tenant"],
@@ -218,7 +289,7 @@ def database_fingerprint(*, tenant_code: str, database_name: str, host: str) -> 
     return hashlib.sha256(material).hexdigest()[:32]
 
 
-def _sign(body: str, secret: str) -> str:
+def _hmac(body: str, secret: str) -> str:
     digest = hmac.new(secret.encode(), body.encode(), hashlib.sha256).digest()
     return _b64encode(digest)
 
