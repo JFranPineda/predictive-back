@@ -6,7 +6,8 @@ from modules.licensing.infrastructure.models import (  # noqa: F401
     Installation,
     LicenseEvent,
     LicenseRecord,
+    RenewalQuery,
     Tenant,
 )
 
-__all__ = ["Tenant", "Installation", "LicenseRecord", "LicenseEvent"]
+__all__ = ["Tenant", "Installation", "LicenseRecord", "LicenseEvent", "RenewalQuery"]

@@ -117,6 +117,11 @@ LICENSE_SECRET = os.environ.get("LICENSE_SECRET", "")
 INSTALLATION_FILE = BASE_DIR / os.environ.get("INSTALLATION_FILE", "data/installation.json")
 MACHINE_ID_FILE = "/etc/machine-id"
 
+# Our renewal service (v4 Phase 3), e.g. https://renovacion.example/renew.
+# Empty: the daily check does nothing and never goes online; renewing is by
+# file only. The customer's IT decides whether this server may reach it.
+LICENSE_RENEW_URL = os.environ.get("LICENSE_RENEW_URL", "")
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "modules.security.interfaces.authentication.TenantJWTAuthentication",

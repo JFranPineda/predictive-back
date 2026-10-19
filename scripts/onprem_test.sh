@@ -14,6 +14,9 @@
 #   scripts/onprem_test.sh down        stop the API and the database, keep data
 #   scripts/onprem_test.sh reset       down, then delete the database and files
 #   scripts/onprem_test.sh manage ...  any manage.py command with the bench env
+#
+# The renewal checks also start the renewal service from ../predictive-renewal
+# on 127.0.0.1:8014 when that repository is there (ONPREM_RENEWAL_DIR).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,6 +24,8 @@ cd "$ROOT"
 
 PG_PORT="${ONPREM_TEST_PG_PORT:-5437}"
 API_PORT="${ONPREM_TEST_API_PORT:-8013}"
+RENEWAL_PORT="${ONPREM_TEST_RENEWAL_PORT:-8014}"
+RENEWAL_DIR="${ONPREM_RENEWAL_DIR:-$ROOT/../predictive-renewal}"
 TENANT=ipsa_test
 STATE="$ROOT/.onprem-test"
 KEYS="$STATE/keys"
@@ -47,6 +52,8 @@ bench_env() {
   export MEDIA_ROOT=.onprem-test/media
   export HISTORY_ROOT=.onprem-test/history
   export INSTALLATION_FILE=.onprem-test/installation.json
+  # No renewal service unless a check sets one: the bench never goes online.
+  export LICENSE_RENEW_URL=
   export BASE_DOMAIN=
   # A tenant URL in .env would win over the bench registry and send a request
   # to a development database. Exported empty, .env can no longer set it.
@@ -161,6 +168,9 @@ sys.exit(0 if d.get("status") == "active" and d.get("deployment") == "on_premise
   echo "Instalación y reloj"
   installation_checks
 
+  echo "Renovación"
+  renewal_checks
+
   echo "Aislamiento"
   code="$(curl -s -o /dev/null -w '%{http_code}' -H "X-Tenant: ambev" "$base/license/status/")"
   if [[ "$code" == "404" ]]; then
@@ -271,6 +281,35 @@ signing_checks() {
   fi
 }
 
+# Our issuing machine, played by its own control plane: a licence signed
+# there is not stored in the customer's until it is loaded.
+issuer() {
+  # A subshell, and after bench_env: it exports the bench's own control plane.
+  (bench_env && export CONTROL_DATABASE_URL="sqlite:///$STATE/issuer.sqlite3" && "$PYTHON" manage.py "$@")
+}
+
+issuer_ready() {
+  [[ -f "$STATE/issuer.sqlite3" ]] && return
+  issuer migrate --database=default --verbosity 0
+  issuer tenants add "$TENANT" "IPSA — banco on-premise" \
+    --url "$APP_URL/predictive_ipsa_test" --deployment on_premise >/dev/null
+}
+
+# Months that take a new licence past the one in force, however far earlier
+# runs of these checks have pushed it.
+past_current() {
+  echo $(( $(field "$(api_status)" days_left) / 28 + 2 ))
+}
+
+# manage with the renewal service configured: after bench_env, which empties it.
+online_manage() {
+  local url="$1"
+  shift
+  (bench_env && export LICENSE_RENEW_URL="$url" && "$PYTHON" manage.py "$@")
+}
+
+licences() { psql_app "select count(*) from licensing_licenserecord" predictive_control; }
+
 # What the API answers right now, through the whole middleware.
 api_status() {
   curl -s -H "X-Tenant: $TENANT" "http://127.0.0.1:$API_PORT/api/v1/license/status/"
@@ -361,7 +400,7 @@ installation_checks() {
   fi
 
   # Another installation: same installation id, another cluster and machine.
-  manage tenants issue "$TENANT" "${SIGN[@]}" "${TERMS[@]}" --months 4 \
+  manage tenants issue "$TENANT" "${SIGN[@]}" "${TERMS[@]}" --months "$(past_current)" \
     --installation "${here%%:*}:$(printf 'a%.0s' {1..32}):$(printf 'b%.0s' {1..32})" >/dev/null
   body="$(api_status)"
   if [[ "$(field "$body" status)" == "other_installation" && "$(write_gate)" == "402" \
@@ -400,6 +439,193 @@ write_state({**state, 'clocks': {**state['clocks'], '$TENANT': {**copy, 'seen_at
   else
     fail "una fecha recordada ilegible cambió el veredicto o no se rehízo: $body"
   fi
+}
+
+# Phase 3: the request that leaves the network, loading a .lic, and the
+# daily check against the renewal service.
+renewal_checks() {
+  local here text body before after out status file count token
+  here="$(manage license fingerprint --tenant "$TENANT" --code 2>/dev/null || true)"
+  text="$(manage license request --tenant "$TENANT" 2>/dev/null || true)"
+  if [[ "$(sed -n '1p' <<<"$text")" == "PREDICTIVE · solicitud de licencia" \
+    && "$(cut -d: -f1 <<<"$text" | tail -n +2 | paste -sd,)" == "cliente,licencia,vence,instalación,versión,equipos,usuarios" \
+    && "$text" == *"instalación: $here"* && "$text" =~ equipos:\ [0-9]+ \
+    && "$text" =~ versión:\ [0-9]+\.[0-9]+ ]]; then
+    pass "la solicitud dice exactamente qué sale: cliente, licencia, instalación, versión y dos conteos"
+  else
+    fail "la solicitud no es la esperada: ${text:-sin salida}"
+  fi
+
+  issuer_ready
+  before="$(field "$(api_status)" days_left)"
+  file="$STATE/renewal.lic"
+  rm -f "$file"
+  issuer tenants issue "$TENANT" "${SIGN[@]}" "${TERMS[@]}" --months "$(past_current)" \
+    --installation "$here" --out "$file" >/dev/null
+  count="$(licences)"
+  out="$(manage license import "$file" --tenant "$TENANT" 2>&1)" && status=0 || status=$?
+  after="$(field "$(api_status)" days_left)"
+  if [[ $status -eq 0 && "$after" -gt "$before" && "$(licences)" -gt "$count" \
+    && "$(field "$(api_status)" status)" == "active" ]]; then
+    pass "un .lic válido extiende la vigencia ($before → $after días) sin reiniciar la API"
+  else
+    fail "cargar un .lic válido no extendió la vigencia (salida $status): ${out:0:200}"
+  fi
+
+  count="$(licences)"
+  out="$(manage license import "$file" --tenant "$TENANT" 2>&1)" && status=0 || status=$?
+  [[ $status -eq 0 && "$out" == *"ya está cargada"* && "$(licences)" == "$count" ]] \
+    && pass "cargar dos veces el mismo .lic no duplica nada" \
+    || fail "cargar dos veces el mismo .lic: ${out:0:200}"
+
+  rm -f "$STATE/foreign.lic"
+  issuer tenants issue "$TENANT" "${SIGN[@]}" "${TERMS[@]}" --months "$(past_current)" \
+    --installation "${here%%:*}:$(printf 'c%.0s' {1..32}):$(printf 'd%.0s' {1..32})" \
+    --out "$STATE/foreign.lic" >/dev/null
+  out="$(manage license import "$STATE/foreign.lic" --tenant "$TENANT" 2>&1)" && status=0 || status=$?
+  [[ $status -ne 0 && "$out" == *"otra instalación"* && "$(licences)" == "$count" ]] \
+    && pass "un .lic de otra instalación se rechaza y dice por qué" \
+    || fail "un .lic de otra instalación no se rechazó con claridad (salida $status): ${out:0:200}"
+
+  # A character in the middle of the signature: the last one of a base64
+  # signature carries only padding bits, and changing it may change nothing.
+  token="$(grep -v '^#' "$file")"
+  "$PYTHON" -c 'import sys
+body, _, sig = sys.argv[1].partition(".")
+sig = sig[:20] + ("B" if sig[20] != "B" else "C") + sig[21:]
+print(f"{body}.{sig}")' "$token" >"$STATE/tampered.lic"
+  out="$(manage license import "$STATE/tampered.lic" --tenant "$TENANT" 2>&1)" && status=0 || status=$?
+  rm -f "$STATE/foreign.lic" "$STATE/tampered.lic"
+  [[ $status -ne 0 && "$out" == *"firma"* && "$(licences)" == "$count" ]] \
+    && pass "un .lic con la firma alterada se rechaza" \
+    || fail "un .lic con la firma alterada no se rechazó (salida $status): ${out:0:200}"
+
+  out="$(manage shell --verbosity 0 -c "
+import sys
+connects = []
+sys.addaudithook(lambda event, args: connects.append(args[1]) if event == 'socket.connect' else None)
+from modules.licensing.infrastructure.tasks import renew_licences
+print('RESULT', renew_licences())
+print('OUTSIDE', [address for address in connects if not (isinstance(address, tuple) and address[1] == $PG_PORT)])
+" 2>&1)"
+  [[ "$out" == *"RESULT not_configured"* && "$out" == *"OUTSIDE []"* ]] \
+    && pass "sin LICENSE_RENEW_URL la tarea diaria no abre ninguna conexión" \
+    || fail "sin LICENSE_RENEW_URL la tarea intentó algo: ${out:0:300}"
+
+  if renewal_http_checks "$here"; then :; fi
+  if [[ -d "$RENEWAL_DIR" ]]; then
+    online_checks "$here"
+  else
+    echo "  · sin $RENEWAL_DIR: no se prueba el servidor de renovación"
+  fi
+}
+
+# Through the API, as the customer's administrator would: only with users,
+# which only IPSA's books bring.
+renewal_http_checks() {
+  local here="$1" base="http://127.0.0.1:$API_PORT/api/v1" admin engineer code file
+  manage tenants run "$TENANT" modules upgrade licensing >/dev/null 2>&1 || true
+  admin="$(bench_token admin@simiai.pe)"
+  if [[ -z "$admin" ]]; then
+    echo "  · sin usuarios importados: no se prueba la renovación por la API"
+    return 0
+  fi
+  engineer="$(bench_token carlos.balta@simiai.pe)"
+
+  body="$(curl -s -H "X-Tenant: $TENANT" -H "Authorization: Bearer $admin" "$base/license/renewal/request/")"
+  [[ "$(field "$body" text)" == "PREDICTIVE · solicitud de licencia"* ]] \
+    && pass "el administrador obtiene la solicitud desde la API" \
+    || fail "la API no da la solicitud al administrador: $body"
+
+  file="$STATE/renewal-http.lic"
+  rm -f "$file"
+  issuer tenants issue "$TENANT" "${SIGN[@]}" "${TERMS[@]}" --months "$(past_current)" \
+    --installation "$here" --out "$file" >/dev/null
+  code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "X-Tenant: $TENANT" \
+    -H "Authorization: Bearer $engineer" -F "licence=@$file" "$base/license/renew/")"
+  [[ "$code" == "403" ]] && pass "sin el permiso de renovar, la API no deja cargar una licencia" \
+    || fail "un ingeniero pudo cargar una licencia (HTTP $code)"
+  body="$(curl -s -X POST -H "X-Tenant: $TENANT" -H "Authorization: Bearer $admin" \
+    -F "licence=@$file" "$base/license/renew/")"
+  [[ "$(field "$body" status)" == "renewed" ]] \
+    && pass "el administrador carga el .lic desde la API" \
+    || fail "la API no cargó el .lic del administrador: $body"
+
+  psql_app "update licensing_tenant set deployment = 'hosted' where code = '$TENANT'" predictive_control >/dev/null
+  code="$(curl -s -o /dev/null -w '%{http_code}' -H "X-Tenant: $TENANT" \
+    -H "Authorization: Bearer $admin" "$base/license/renewal/request/")"
+  body="$(api_status)"
+  psql_app "update licensing_tenant set deployment = 'on_premise' where code = '$TENANT'" predictive_control >/dev/null
+  [[ "$code" == "404" && "$(field "$body" renewable)" == "False" ]] \
+    && pass "en la nube no hay renovación que mostrar (solo on-premise)" \
+    || fail "en la nube la renovación sigue a la vista (HTTP $code)"
+}
+
+bench_token() {
+  curl -s -H "X-Tenant: $TENANT" -H "Content-Type: application/json" \
+    -d "{\"email\": \"$1\", \"password\": \"predictive2026\"}" \
+    "http://127.0.0.1:$API_PORT/api/v1/auth/login/" | "$PYTHON" -c 'import json, sys
+try:
+    print(json.load(sys.stdin).get("access", ""))
+except ValueError:
+    print("")'
+}
+
+# The renewal service, run from its own repository with its own database.
+renewal_server() {
+  (renewal_env && "$RENEWAL_DIR/.venv/bin/python" manage.py "$@")
+}
+
+# Its own settings: the bench's exported ones would point it at PREDICTIVE's.
+renewal_env() {
+  cd "$RENEWAL_DIR" || return 1
+  export DJANGO_SETTINGS_MODULE=config.settings SECRET_KEY=onprem-test-only
+  export RENEWAL_DATABASE="$STATE/renewal.sqlite3"
+  PREDICTIVE_PUBLIC_KEY="$(cat "$KEYS/public.key")"
+  export PREDICTIVE_PUBLIC_KEY
+}
+
+online_checks() {
+  local here="$1" url="http://127.0.0.1:$RENEWAL_PORT/renew" before after out queries file
+  renewal_server migrate --verbosity 0
+  (renewal_env && setsid "$RENEWAL_DIR/.venv/bin/python" manage.py runserver "127.0.0.1:$RENEWAL_PORT" \
+    --noreload >"$STATE/renewal.log" 2>&1 & echo $! >"$STATE/renewal.pid")
+  for _ in $(seq 1 40); do
+    curl -s -o /dev/null "http://127.0.0.1:$RENEWAL_PORT/admin/login/" && break
+    sleep 0.25
+  done
+
+  queries="$(psql_app "select count(*) from licensing_renewalquery" predictive_control || echo 0)"
+  before="$(field "$(api_status)" days_left)"
+  out="$(online_manage "$url" license renew --tenant "$TENANT" 2>&1)"
+  [[ "$out" == *"pending"* && "$(field "$(api_status)" days_left)" == "$before" ]] \
+    && pass "sin el período pagado, la consulta en línea no cambia nada" \
+    || fail "sin el período pagado la consulta hizo algo: ${out:0:200}"
+
+  file="$STATE/paid.lic"
+  rm -f "$file"
+  issuer tenants issue "$TENANT" "${SIGN[@]}" "${TERMS[@]}" --months "$(past_current)" \
+    --installation "$here" --out "$file" >/dev/null
+  renewal_server upload_licence "$file" >/dev/null
+  out="$(manage shell --verbosity 0 -c "
+from django.test import override_settings
+from modules.licensing.infrastructure.tasks import renew_licences
+with override_settings(LICENSE_RENEW_URL='$url'):
+    print('RESULT', renew_licences())
+" 2>&1)"
+  after="$(field "$(api_status)" days_left)"
+  [[ "$out" == *"'$TENANT': 'renewed'"* && "$after" -gt "$before" ]] \
+    && pass "con el período pagado, la tarea diaria renueva sola ($before → $after días)" \
+    || fail "con el período pagado la tarea no renovó: ${out:0:200}"
+
+  out="$(manage license log --tenant "$TENANT" 2>&1)"
+  [[ "$(psql_app "select count(*) from licensing_renewalquery" predictive_control)" -ge $(( queries + 2 )) \
+    && "$out" == *"pending"* && "$out" == *"renewed"* && "$out" == *"\"equipment\""* ]] \
+    && pass "cada consulta queda registrada con lo que se envió: license log" \
+    || fail "las consultas no quedaron en el registro local: ${out:0:300}"
+
+  kill -TERM -- "-$(cat "$STATE/renewal.pid")" 2>/dev/null || kill "$(cat "$STATE/renewal.pid")" 2>/dev/null || true
+  rm -f "$STATE/renewal.pid"
 }
 
 down() {

@@ -81,6 +81,30 @@ class LicenseRecord(TimeStampedModel):
         return self.revoked_at is not None
 
 
+class RenewalQuery(models.Model):
+    """Every question this server asked our renewal service, with exactly
+    what it sent: the customer's IT can audit what left their network."""
+
+    OUTCOMES = [
+        ("renewed", "Renovada"), ("pending", "Pendiente de pago"),
+        ("rejected", "Licencia rechazada"), ("error", "Sin respuesta válida"),
+    ]
+
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="renewal_queries")
+    at = models.DateTimeField(auto_now_add=True, db_index=True)
+    url = models.CharField(max_length=300)
+    sent = models.JSONField()
+    outcome = models.CharField(max_length=10, choices=OUTCOMES)
+    detail = models.CharField(max_length=300, blank=True)
+    license_id = models.CharField(max_length=40, blank=True)
+
+    class Meta:
+        ordering = ["-at"]
+
+    def __str__(self) -> str:
+        return f"{self.tenant.code} {self.at:%Y-%m-%d %H:%M} {self.outcome}"
+
+
 class LicenseEvent(models.Model):
     """Why a request was refused, and when. The first thing support looks at."""
 

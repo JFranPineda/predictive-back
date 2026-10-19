@@ -4,7 +4,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from modules.licensing.application.license_service import current_verdict
+from modules.licensing.application.license_service import current_verdict, latest_record
 from modules.licensing.infrastructure.keys import trusted_keys
 
 
@@ -18,6 +18,7 @@ class LicenseStatusView(APIView):
         tenant = getattr(request, "tenant", None)
         if tenant is None:
             return Response({"status": "unknown"}, status=400)
+        record = latest_record(tenant.code)
         verdict = current_verdict(
             tenant.code, keys=trusted_keys(), suspended=tenant.is_suspended
         )
@@ -31,5 +32,8 @@ class LicenseStatusView(APIView):
                 "days_left": verdict.days_left,
                 "reason": verdict.reason,
                 "should_warn": verdict.should_warn,
+                "valid_until": record.valid_until.isoformat() if record else None,
+                # On-premise renews by file or online (v4 Phase 3); hosted we renew ourselves.
+                "renewable": tenant.deployment == "on_premise",
             }
         )

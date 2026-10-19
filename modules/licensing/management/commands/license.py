@@ -4,6 +4,10 @@
     license keygen --signing-key <file> --password-file <file> --public-key <file>
     license fingerprint [--tenant ipsa] [--code]
     license clock reset [--tenant ipsa]
+    license request [--tenant ipsa]
+    license import <file.lic> [--tenant ipsa]
+    license renew [--tenant ipsa]
+    license log [--tenant ipsa] [--limit 20]
 
 keygen runs on the issuing machine. Without --public-key the public half is
 installed in the program (`domain/signing_key.py`) and ships with the next
@@ -15,6 +19,10 @@ thing support asks for, and what is sent to issue or reactivate a licence.
 clock reset is the emergency way out of a clock that once jumped forward: it
 forgets the remembered date, never below the licence's issue date, and leaves
 an event support sees. The normal way out is a new licence.
+
+request, import, renew and log are renewal (v4 Phase 3): the text to send us,
+loading the `.lic` we send back, asking the online service now instead of
+waiting for the daily check, and the record of what was sent to it.
 """
 
 from __future__ import annotations
@@ -42,8 +50,11 @@ class Command(BaseCommand):
     help = "Licence key pair, installation fingerprint and remembered date"
 
     def add_arguments(self, parser):
-        parser.add_argument("action", choices=["keygen", "fingerprint", "clock"])
-        parser.add_argument("subaction", nargs="?", choices=["reset"])
+        parser.add_argument(
+            "action", choices=["keygen", "fingerprint", "clock", "request", "import", "renew", "log"]
+        )
+        parser.add_argument("target", nargs="?", help="clock: reset · import: the .lic file")
+        parser.add_argument("--limit", type=int, default=20, help="log: how many queries")
         parser.add_argument("--signing-key", help="keygen: where the encrypted signing key goes")
         parser.add_argument("--password-file", help="keygen: read the password from this file")
         parser.add_argument("--public-key", help="keygen: write the public key here, not into the program")
@@ -53,8 +64,10 @@ class Command(BaseCommand):
         parser.add_argument("--code", action="store_true", help="fingerprint: print only the code")
 
     def handle(self, *args, **options):
-        if options["action"] == "clock" and options["subaction"] != "reset":
+        if options["action"] == "clock" and options["target"] != "reset":
             raise CommandError("usage: license clock reset [--tenant <code>]")
+        if options["action"] == "import" and not options["target"]:
+            raise CommandError("usage: license import <file.lic> [--tenant <code>]")
         getattr(self, f"_{options['action']}")(options)
 
     def _keygen(self, options):
@@ -132,6 +145,60 @@ class Command(BaseCommand):
         detail += f"{now:%Y-%m-%d %H:%M} UTC"
         LicenseEvent.objects.create(tenant=tenant, kind="clock_reset", detail=detail)
         self.stdout.write(self.style.WARNING(f"fecha recordada de '{code}' reiniciada: {detail}"))
+
+
+    def _request(self, options):
+        from modules.licensing.application.renewal import build_request
+        from modules.licensing.domain.renewal import RenewalRejectedError
+        from modules.licensing.infrastructure.keys import trusted_keys
+
+        try:
+            self.stdout.write(build_request(_tenant(options), keys=trusted_keys()).text())
+        except RenewalRejectedError as exc:
+            raise CommandError(str(exc)) from exc
+
+    def _import(self, options):
+        from modules.licensing.application.renewal import import_licence
+        from modules.licensing.domain.renewal import RenewalRejectedError
+        from modules.licensing.infrastructure.keys import trusted_keys
+
+        try:
+            text = Path(options["target"]).read_text()
+            outcome = import_licence(_tenant(options), text, keys=trusted_keys(), source="license import")
+        except OSError as exc:
+            raise CommandError(f"no se puede leer {options['target']}: {exc.strerror}") from exc
+        except RenewalRejectedError as exc:
+            raise CommandError(str(exc)) from exc
+        if outcome.status == "already":
+            self.stdout.write(f"{outcome.license_id} ya está cargada: vigente hasta {outcome.valid_until}")
+        else:
+            self.stdout.write(self.style.SUCCESS(
+                f"licencia {outcome.license_id} cargada: vigente hasta {outcome.valid_until}"
+            ))
+
+    def _renew(self, options):
+        from modules.licensing.application.renewal import renew_online
+        from modules.licensing.infrastructure.keys import trusted_keys
+        from modules.licensing.infrastructure.renewal_client import post_json
+
+        code = _tenant(options)
+        outcome = renew_online(code, keys=trusted_keys(), url=settings.LICENSE_RENEW_URL, post=post_json)
+        if outcome == "not_configured":
+            self.stdout.write("sin LICENSE_RENEW_URL: la renovación es solo por archivo (license import)")
+            return
+        self.stdout.write(f"{code}: {outcome} (detalle en license log)")
+
+    def _log(self, options):
+        import json
+
+        from modules.licensing.infrastructure.models import RenewalQuery
+
+        queries = RenewalQuery.objects.select_related("tenant").filter(tenant__code=_tenant(options))
+        for query in queries[: options["limit"]]:
+            self.stdout.write(f"{query.at:%Y-%m-%d %H:%M} UTC  {query.outcome:<8} {query.url}")
+            self.stdout.write(f"    enviado: {json.dumps(query.sent, ensure_ascii=False, sort_keys=True)}")
+            if query.detail or query.license_id:
+                self.stdout.write(f"    {query.detail} {query.license_id}".rstrip())
 
 
 def _tenant(options) -> str:

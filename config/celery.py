@@ -15,4 +15,6 @@ app.conf.beat_schedule = {
     # R4: the heavy image work runs when nobody is waiting for it.
     "convert-media-nightly": {"task": "media.convert_pending", "schedule": crontab(hour=0, minute=15)},
     "prune-originals": {"task": "media.prune_originals", "schedule": crontab(hour=3, minute=0)},
+    # v4 Phase 3: does nothing unless LICENSE_RENEW_URL is set.
+    "renew-licences": {"task": "licensing.renew_online", "schedule": crontab(hour=6, minute=30)},
 }

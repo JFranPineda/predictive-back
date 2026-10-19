@@ -21,7 +21,7 @@ from datetime import UTC, date, datetime
 from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError
 
-from modules.licensing.application.license_service import latest_record
+from modules.licensing.application.license_service import latest_record, store_licence
 from modules.licensing.application.tenant_resolver import resolve
 from modules.licensing.domain.installation import InstallationCodeError, InstallationFingerprint
 from modules.licensing.domain.license import (
@@ -67,6 +67,7 @@ class Command(BaseCommand):
         parser.add_argument("--reason", default="")
         parser.add_argument("--signing-key", help="the encrypted signing key (issue, reissue)")
         parser.add_argument("--password-file", help="read its password from this file instead of asking")
+        parser.add_argument("--out", default="", help="issue, reissue: also write the .lic file to send")
         parser.add_argument("--installation", default="",
                             help="bind the licence to this installation code (license fingerprint)")
 
@@ -139,7 +140,8 @@ class Command(BaseCommand):
             installation=_installation(options),
         )
         token = self._sign(license_, options)
-        _store(tenant, license_, token, f"{license_.plan} → {until}")
+        store_licence(tenant, license_, token, kind="issued", detail=f"{license_.plan} → {until}")
+        _write_out(options, license_, token)
         self.stdout.write(self.style.SUCCESS(f"licencia {license_.license_id} válida hasta {until}"))
         self.stdout.write(token)
 
@@ -166,8 +168,11 @@ class Command(BaseCommand):
 
         license_ = dataclasses.replace(current, license_id=_new_license_id(), installation=installation)
         token = self._sign(license_, options)
-        _store(record.tenant, license_, token,
-               f"reemitida v{TOKEN_VERSION} de {record.license_id}: {license_.plan} → {license_.valid_until}")
+        store_licence(
+            record.tenant, license_, token, kind="issued",
+            detail=f"reemitida v{TOKEN_VERSION} de {record.license_id}, hasta {license_.valid_until}",
+        )
+        _write_out(options, license_, token)
         self.stdout.write(self.style.SUCCESS(
             f"licencia {license_.license_id} (v{TOKEN_VERSION}) reemplaza a {record.license_id}, "
             f"válida hasta {license_.valid_until}"
@@ -240,19 +245,16 @@ def _new_license_id() -> str:
     return f"lic-{uuid.uuid4().hex[:12]}"
 
 
-def _store(tenant: Tenant, license_: License, token: str, detail: str) -> None:
-    LicenseRecord.objects.create(
-        tenant=tenant, license_id=license_.license_id, token=token, plan=license_.plan,
-        issued_at=license_.issued_at, valid_until=license_.valid_until, grace_days=license_.grace_days,
-        modules=list(license_.modules),
-        limits={
-            "max_plants": license_.limits.max_plants,
-            "max_equipment": license_.limits.max_equipment,
-            "max_users": license_.limits.max_users,
-            "max_external_users": license_.limits.max_external_users,
-        },
-    )
-    LicenseEvent.objects.create(tenant=tenant, kind="issued", detail=detail[:300])
+def _write_out(options, license_: License, token: str) -> None:
+    """The file the customer loads (`license import`, or /settings/license).
+    The comment line is for whoever opens it; the token is all that counts."""
+    if not options["out"]:
+        return
+    with open(options["out"], "x") as handle:
+        handle.write(
+            f"# PREDICTIVE — licencia {license_.license_id} para {license_.tenant_code}, "
+            f"válida hasta {license_.valid_until}\n{token}\n"
+        )
 
 
 def _describe(url: str) -> tuple[str, str]:

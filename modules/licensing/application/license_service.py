@@ -102,6 +102,24 @@ def _clock_floor(tenant, license_: License, now: datetime, installation: str) ->
     return floor
 
 
+def store_licence(tenant, license_: License, token: str, *, kind: str, detail: str) -> None:
+    """The record enforcement reads from now on: the newest term wins."""
+    from modules.licensing.infrastructure.models import LicenseEvent, LicenseRecord
+
+    LicenseRecord.objects.create(
+        tenant=tenant, license_id=license_.license_id, token=token, plan=license_.plan,
+        issued_at=license_.issued_at, valid_until=license_.valid_until, grace_days=license_.grace_days,
+        modules=list(license_.modules),
+        limits={
+            "max_plants": license_.limits.max_plants,
+            "max_equipment": license_.limits.max_equipment,
+            "max_users": license_.limits.max_users,
+            "max_external_users": license_.limits.max_external_users,
+        },
+    )
+    LicenseEvent.objects.create(tenant=tenant, kind=kind, detail=detail[:300])
+
+
 class PlanLimitReachedError(Exception):
     """One more would exceed the plan; the message says so in the customer's words."""
 
