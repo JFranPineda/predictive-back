@@ -27,6 +27,8 @@ KEYS="$STATE/keys"
 PYTHON="${PYTHON:-$ROOT/.venv/bin/python}"
 APP_URL="postgres://predictive_app:onprem-test@127.0.0.1:$PG_PORT"
 COMPOSE=(docker compose -f deploy/onprem-test/compose.yml)
+SIGN=(--signing-key "$KEYS/signing-key.pem" --password-file "$KEYS/password")
+TERMS=(--plan gestionado --grace 30 --equipment 650 --users 40 --plants 1)
 
 bench_env() {
   export DJANGO_SETTINGS_MODULE=config.settings.dev
@@ -44,6 +46,7 @@ bench_env() {
   export MEDIA_BACKEND=local
   export MEDIA_ROOT=.onprem-test/media
   export HISTORY_ROOT=.onprem-test/history
+  export INSTALLATION_FILE=.onprem-test/installation.json
   export BASE_DOMAIN=
   # A tenant URL in .env would win over the bench registry and send a request
   # to a development database. Exported empty, .env can no longer set it.
@@ -84,11 +87,10 @@ up() {
   # No `modules bootstrap` here: on an empty database the auto-installed
   # modules need a catalogue (units, magnitudes, statuses) that only the
   # importer lays down today. `import` runs it after the catalogue exists.
-  # Also when the bench still holds a v1 licence from before Phase 1.
-  if ! manage tenants list | grep -E " $TENANT " | grep -q " v2"; then
-    manage tenants issue "$TENANT" --signing-key "$KEYS/signing-key.pem" \
-      --password-file "$KEYS/password" --plan gestionado --months 3 --grace 30 \
-      --equipment 650 --users 40 --plants 1 | head -1
+  # Also when the bench still holds a licence from before Phase 1 or 2.
+  if ! manage tenants list | grep -E " $TENANT " | grep -q " v2 · inst "; then
+    manage tenants issue "$TENANT" "${SIGN[@]}" "${TERMS[@]}" --months 3 \
+      --installation "$(manage license fingerprint --tenant "$TENANT" --code)" | head -1
   fi
   manage tenants list
 }
@@ -155,6 +157,9 @@ sys.exit(0 if d.get("status") == "active" and d.get("deployment") == "on_premise
 
   echo "Firma"
   signing_checks
+
+  echo "Instalación y reloj"
+  installation_checks
 
   echo "Aislamiento"
   code="$(curl -s -o /dev/null -w '%{http_code}' -H "X-Tenant: ambev" "$base/license/status/")"
@@ -263,6 +268,137 @@ signing_checks() {
     fail "hay una clave privada versionada en el repo"
   else
     pass "ninguna clave privada versionada en el repo"
+  fi
+}
+
+# What the API answers right now, through the whole middleware.
+api_status() {
+  curl -s -H "X-Tenant: $TENANT" "http://127.0.0.1:$API_PORT/api/v1/license/status/"
+}
+
+# A write the licence gate judges before anything else: 402 when it refuses,
+# 401 (no credentials) when it lets it through. It never writes.
+write_gate() {
+  curl -s -o /dev/null -w '%{http_code}' -X PUT -H "X-Tenant: $TENANT" \
+    -H "Content-Type: application/json" -d '{"language":"es"}' \
+    "http://127.0.0.1:$API_PORT/api/v1/users/me/language/"
+}
+
+field() { "$PYTHON" -c 'import json, sys; print(json.loads(sys.argv[1]).get(sys.argv[2], ""))' "$1" "$2"; }
+
+# The verdict the service builds for a request, from a shell. `$1` shifts the
+# clock by that many hours (freezegun): that is how the remembered date is
+# pushed ahead of the real clock, which the API then sees as behind.
+verdict_at() {
+  manage shell --verbosity 0 -c "
+from datetime import UTC, datetime, timedelta
+from freezegun import freeze_time
+from modules.licensing.application.license_service import current_verdict
+from modules.licensing.infrastructure.keys import trusted_keys
+with freeze_time(datetime.now(UTC) + timedelta(hours=${1:-0})):
+    print('VERDICT', current_verdict('$TENANT', keys=trusted_keys()).status.value)
+" 2>&1 | grep '^VERDICT' | cut -d' ' -f2
+}
+
+# Phase 2: which installation the licence covers (two of three), and a
+# remembered date that a clock more than a day behind turns into read-only.
+installation_checks() {
+  local here out body file_id db_id resets
+  here="$(manage license fingerprint --tenant "$TENANT" --code 2>/dev/null || true)"
+  out="$(manage license fingerprint --tenant "$TENANT" 2>&1 || true)"
+  if [[ "$here" =~ ^[0-9a-f-]{36}:[0-9a-f]{32}:[0-9a-f]{32}$ ]] && grep -q "PostgreSQL" <<<"$out"; then
+    pass "license fingerprint da los tres datos: instalación, PostgreSQL y máquina"
+  else
+    fail "license fingerprint no da los tres datos: ${here:-$out}"
+  fi
+
+  file_id="$("$PYTHON" -c 'import json, sys; print(json.load(open(sys.argv[1]))["installation_id"])' \
+    "$STATE/installation.json" 2>/dev/null || true)"
+  db_id="$(psql_app "select installation_id from licensing_installation" predictive_control || true)"
+  if [[ -n "$db_id" && "$file_id" == "$db_id" && "$here" == "$db_id":* ]]; then
+    pass "el identificador de instalación está en el plano de control y en el volumen de datos"
+  else
+    fail "identificador distinto o ausente: control=${db_id:-?} volumen=${file_id:-?}"
+  fi
+
+  body="$(api_status)"
+  if manage tenants list | grep -E " $TENANT " | grep -q "· inst ${here:0:8}" \
+    && [[ "$(field "$body" status)" == "active" ]]; then
+    pass "la licencia está ligada a esta instalación y responde active"
+  else
+    fail "la licencia no está ligada a esta instalación o no responde active: $body"
+  fi
+
+  echo "otra-maquina-$RANDOM" >"$STATE/other-machine-id"
+  out="$(MACHINE_ID_FILE="$STATE/other-machine-id" verdict_at 0)"
+  rm -f "$STATE/other-machine-id"
+  [[ "$out" == "active" ]] && pass "con otra máquina sigue active: 2 de 3 alcanzan" \
+    || fail "con otra máquina responde ${out:-nada}"
+
+  [[ "$(verdict_at 12)" == "active" && "$(field "$(api_status)" status)" == "active" ]] \
+    && pass "un reloj 12 h por debajo de la fecha recordada no cambia nada" \
+    || fail "12 h por debajo ya cambia el veredicto"
+
+  verdict_at 48 >/dev/null
+  body="$(api_status)"
+  if [[ "$(field "$body" status)" == "clock_behind" && "$(write_gate)" == "402" \
+    && "$(field "$body" reason)" == *"hora del servidor"* ]]; then
+    pass "48 h por debajo: solo lectura, y explica qué fecha corregir"
+  else
+    fail "48 h por debajo no pasa a solo lectura con su motivo: $body"
+  fi
+  [[ "$(verdict_at 48)" == "active" ]] && pass "con la fecha corregida vuelve a active" \
+    || fail "con la fecha corregida no vuelve a active"
+
+  resets="$(psql_app "select count(*) from licensing_licenseevent where kind = 'clock_reset'" predictive_control)"
+  manage license clock reset --tenant "$TENANT" >/dev/null 2>&1 || true
+  if [[ "$(field "$(api_status)" status)" == "active" && "$(psql_app \
+    "select count(*) from licensing_licenseevent where kind = 'clock_reset'" predictive_control)" \
+    -gt "$resets" ]]; then
+    pass "license clock reset devuelve el sistema a active y queda registrado"
+  else
+    fail "license clock reset no lo devolvió a active o no quedó registrado"
+  fi
+
+  # Another installation: same installation id, another cluster and machine.
+  manage tenants issue "$TENANT" "${SIGN[@]}" "${TERMS[@]}" --months 4 \
+    --installation "${here%%:*}:$(printf 'a%.0s' {1..32}):$(printf 'b%.0s' {1..32})" >/dev/null
+  body="$(api_status)"
+  if [[ "$(field "$body" status)" == "other_installation" && "$(write_gate)" == "402" \
+    && "$(field "$body" reason)" == *"license fingerprint"* ]]; then
+    pass "una licencia de otra instalación: solo lectura y cómo reactivarla"
+  else
+    fail "una licencia de otra instalación no se trata como tal: $body"
+  fi
+
+  # The remembered date pushed 48 h ahead under the licence in force: the
+  # reissued one is active only if a new licence starts the date again.
+  verdict_at 48 >/dev/null
+  manage tenants reissue "$TENANT" "${SIGN[@]}" --installation "$here" >/dev/null
+  body="$(api_status)"
+  if [[ "$(field "$body" status)" == "active" && "$(write_gate)" == "401" ]]; then
+    pass "reactivada con una licencia nueva para esta instalación, que además reinicia la fecha"
+  else
+    fail "la reactivación no la deja active: $body"
+  fi
+
+  # Both copies edited the way a flipped byte would: same signature, the year
+  # moved to 2096. Trusted, that would be seventy years of read-only.
+  manage shell --verbosity 0 -c "
+from modules.licensing.infrastructure.installation import read_state, write_state
+from modules.licensing.infrastructure.models import Tenant
+tenant = Tenant.objects.get(code='$TENANT')
+Tenant.objects.filter(pk=tenant.pk).update(clock={**tenant.clock, 'seen_at': '2096' + tenant.clock['seen_at'][4:]})
+state = read_state()
+copy = state['clocks']['$TENANT']
+write_state({**state, 'clocks': {**state['clocks'], '$TENANT': {**copy, 'seen_at': '2096' + copy['seen_at'][4:]}}})
+"
+  body="$(api_status)"
+  if [[ "$(field "$body" status)" == "active" ]] && ! psql_app \
+    "select clock->>'seen_at' from licensing_tenant where code = '$TENANT'" predictive_control | grep -q '^2096'; then
+    pass "una fecha recordada ilegible se ignora y se vuelve a escribir: sigue active"
+  else
+    fail "una fecha recordada ilegible cambió el veredicto o no se rehízo: $body"
   fi
 }
 

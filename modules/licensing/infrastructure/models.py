@@ -30,6 +30,9 @@ class Tenant(TimeStampedModel):
     is_suspended = models.BooleanField(default=False)
     suspended_reason = models.CharField(max_length=200, blank=True)
     notes = models.TextField(blank=True)
+    # The highest date seen under the licence in force, signed (domain/clock.py).
+    # A copy lives in the installation file.
+    clock = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ["code"]
@@ -40,6 +43,18 @@ class Tenant(TimeStampedModel):
     @property
     def alias(self) -> str:
         return f"tenant_{self.code}"
+
+
+class Installation(models.Model):
+    """This installation's identity: one row, created on first use. A copy
+    lives in the data volume, so losing either one does not change it."""
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1)
+    installation_id = models.UUIDField(unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return str(self.installation_id)
 
 
 class LicenseRecord(TimeStampedModel):
@@ -73,6 +88,7 @@ class LicenseEvent(models.Model):
         ("issued", "Emitida"), ("renewed", "Renovada"), ("revoked", "Revocada"),
         ("blocked", "Acceso bloqueado"), ("degraded", "Solo lectura"),
         ("limit_reached", "Límite alcanzado"), ("fingerprint_mismatch", "Base de datos distinta"),
+        ("clock_reset", "Fecha recordada reiniciada"),
     ]
 
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="events")

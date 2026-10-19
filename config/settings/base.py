@@ -111,6 +111,12 @@ LICENSE_PUBLIC_KEY = _signing_key.PUBLIC_KEY
 # default here would be a published secret anyone could sign with.
 LICENSE_SECRET = os.environ.get("LICENSE_SECRET", "")
 
+# The installation a licence covers (v4 Phase 2). The file lives in the data
+# volume, so a restore of that volume keeps the installation's identity and its
+# remembered date; the machine id is the server's, never configured.
+INSTALLATION_FILE = BASE_DIR / os.environ.get("INSTALLATION_FILE", "data/installation.json")
+MACHINE_ID_FILE = "/etc/machine-id"
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "modules.security.interfaces.authentication.TenantJWTAuthentication",

@@ -8,6 +8,10 @@ still serving the customer until its own copy expired. A revocation that lands
 The check is one indexed lookup on a table with one row per contract. If it
 ever shows up in a profile, the fix is a shared cache with explicit
 invalidation, not a local one that lies.
+
+The same goes for what the verdict is checked against (v4 Phase 2): the
+installation's identifiers and the remembered date are read on every request,
+so a database swapped under a running process is noticed on the next one.
 """
 
 from __future__ import annotations
@@ -16,7 +20,9 @@ from datetime import UTC, datetime, timedelta
 
 from django.utils import timezone
 
+from modules.licensing.domain.clock import advanced, clock_floor
 from modules.licensing.domain.license import (
+    License,
     LicenseError,
     LicenseStatus,
     LicenseVerdict,
@@ -44,24 +50,56 @@ def current_verdict(tenant_code: str, *, keys: TrustedKeys, suspended: bool = Fa
         _log(tenant_code, "blocked", f"token inválido: {exc}")
         return LicenseVerdict(LicenseStatus.INVALID, True, 0, "licencia no válida")
 
-    fingerprint = (
-        Tenant.objects.filter(code=tenant_code)
-        .values_list("database_fingerprint", flat=True)
-        .first()
-        or None
-    )
+    from modules.licensing.infrastructure.installation import installation_id, observed_installation
+
+    tenant = Tenant.objects.filter(code=tenant_code).first()
+    now = datetime.now(UTC)
+    installation = installation_id()
     verdict = evaluate(
         license_,
-        today=datetime.now(UTC).date(),
+        now=now,
         revoked=frozenset({record.license_id}) if record.is_revoked else frozenset(),
         suspended=suspended,
-        database_fingerprint=fingerprint,
+        database_fingerprint=(tenant.database_fingerprint or None) if tenant else None,
+        # Only a licence bound to an installation pays for reading the three.
+        installation=(
+            observed_installation(tenant_code, installation=installation)
+            if license_.installation.is_bound else None
+        ),
+        clock_floor=_clock_floor(tenant, license_, now, installation) if tenant else None,
     )
     if verdict.blocks:
         _log(tenant_code, "blocked", verdict.reason)
     elif verdict.read_only:
         _log(tenant_code, "degraded", verdict.reason)
     return verdict
+
+
+def _clock_floor(tenant, license_: License, now: datetime, installation: str) -> datetime:
+    """The highest date seen under this licence, moved forward when the clock
+    is ahead of it (at most once an hour)."""
+    from modules.licensing.infrastructure.clock_store import (
+        latest_reading_after,
+        load_reference,
+        reading_baseline,
+        store_reference,
+    )
+    from modules.licensing.infrastructure.context import ensure_registered
+
+    alias = ensure_registered(tenant.code)
+    reference = load_reference(tenant, license_id=license_.license_id, installation_id=installation)
+    floor = clock_floor(
+        license_,
+        reference=reference,
+        latest_reading_at=latest_reading_after(alias, reference.reading_baseline) if reference else None,
+    )
+    update = advanced(
+        reference, license_id=license_.license_id, now=now,
+        reading_baseline=reference.reading_baseline if reference else reading_baseline(alias),
+    )
+    if update is not None:
+        store_reference(tenant, update, installation_id=installation)
+    return floor
 
 
 class PlanLimitReachedError(Exception):

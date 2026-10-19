@@ -5,6 +5,7 @@
     tenants migrate ambev
     tenants issue ambev --signing-key ~/claves/predictive-signing.pem --plan enterprise --months 12
     tenants reissue ambev --signing-key ~/claves/predictive-signing.pem
+    tenants reissue ipsa --signing-key <file> --installation <code from license fingerprint>
     tenants revoke ambev --reason "contrato terminado"
     tenants run ambev <command> [args…]
 """
@@ -22,6 +23,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from modules.licensing.application.license_service import latest_record
 from modules.licensing.application.tenant_resolver import resolve
+from modules.licensing.domain.installation import InstallationCodeError, InstallationFingerprint
 from modules.licensing.domain.license import (
     TOKEN_VERSION,
     License,
@@ -43,7 +45,9 @@ class Command(BaseCommand):
     help = "Manage customer installations and their licences"
 
     def add_arguments(self, parser):
-        parser.add_argument("action", choices=["list", "add", "migrate", "issue", "reissue", "revoke", "run"])
+        parser.add_argument(
+            "action", choices=["list", "add", "migrate", "issue", "reissue", "revoke", "run"]
+        )
         parser.add_argument("code", nargs="?")
         parser.add_argument("name", nargs="?")
         # `run` forwards the inner command's own flags, so its tail must be
@@ -63,6 +67,8 @@ class Command(BaseCommand):
         parser.add_argument("--reason", default="")
         parser.add_argument("--signing-key", help="the encrypted signing key (issue, reissue)")
         parser.add_argument("--password-file", help="read its password from this file instead of asking")
+        parser.add_argument("--installation", default="",
+                            help="bind the licence to this installation code (license fingerprint)")
 
     def handle(self, *args, **options):
         getattr(self, f"_{options['action']}")(options)
@@ -74,6 +80,7 @@ class Command(BaseCommand):
             latest = tenant.licenses.order_by("-valid_until", "-created_at").first()
             licence = (
                 f"{latest.plan} hasta {latest.valid_until} · v{token_version(latest.token) or '?'}"
+                + _bound_to(latest.token)
                 + (" (REVOCADA)" if latest.is_revoked else "")
                 if latest
                 else "sin licencia"
@@ -129,6 +136,7 @@ class Command(BaseCommand):
             ),
             modules=tuple(filter(None, options["modules"].split(","))),
             database_fingerprint=tenant.database_fingerprint,
+            installation=_installation(options),
         )
         token = self._sign(license_, options)
         _store(tenant, license_, token, f"{license_.plan} → {until}")
@@ -136,8 +144,10 @@ class Command(BaseCommand):
         self.stdout.write(token)
 
     def _reissue(self, options):
-        """The licence in force, same terms, signed as v2. The old record
-        stays: it is history, and the newer one is what enforcement reads."""
+        """The licence in force, same terms, signed as v2 — and, with
+        --installation, for another installation: that is how a customer who
+        moved servers is reactivated. The old record stays: it is history, and
+        the newer one is what enforcement reads."""
         code, _ = self._require(options)
         record = latest_record(code)
         if record is None:
@@ -145,15 +155,16 @@ class Command(BaseCommand):
         if record.is_revoked:
             # Reissuing a revoked licence would bring it back.
             raise CommandError(f"la licencia vigente de '{code}' está revocada: emite una nueva")
-        if token_version(record.token) == TOKEN_VERSION:
-            self.stdout.write(f"{record.license_id} ya es v{TOKEN_VERSION}: nada que reemitir")
-            return
         try:
             current = verify(record.token, trusted_keys())
         except LicenseError as exc:
             raise CommandError(f"la licencia vigente no verifica ({exc}): no se reemite") from exc
+        installation = _installation(options) if options["installation"] else current.installation
+        if token_version(record.token) == TOKEN_VERSION and installation == current.installation:
+            self.stdout.write(f"{record.license_id} ya es v{TOKEN_VERSION} y de esta instalación")
+            return
 
-        license_ = dataclasses.replace(current, license_id=_new_license_id())
+        license_ = dataclasses.replace(current, license_id=_new_license_id(), installation=installation)
         token = self._sign(license_, options)
         _store(record.tenant, license_, token,
                f"reemitida v{TOKEN_VERSION} de {record.license_id}: {license_.plan} → {license_.valid_until}")
@@ -205,6 +216,24 @@ class Command(BaseCommand):
         if need_name and not name:
             raise CommandError("a name is required")
         return code, name
+
+
+def _installation(options) -> InstallationFingerprint:
+    """No --installation: the licence is not bound to one (hosted)."""
+    if not options["installation"]:
+        return InstallationFingerprint()
+    try:
+        return InstallationFingerprint.from_code(options["installation"])
+    except InstallationCodeError as exc:
+        raise CommandError(str(exc)) from exc
+
+
+def _bound_to(token: str) -> str:
+    try:
+        installation = verify(token, trusted_keys()).installation
+    except LicenseError:
+        return ""
+    return f" · inst {installation.installation_id[:8]}" if installation.is_bound else ""
 
 
 def _new_license_id() -> str:

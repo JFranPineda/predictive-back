@@ -37,6 +37,8 @@ from typing import Any
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from modules.licensing.domain.clock import is_behind
+from modules.licensing.domain.installation import InstallationFingerprint, belongs_to
 from modules.licensing.domain.signing import SigningKeyError, load_public_key
 
 TOKEN_VERSION = 2
@@ -63,6 +65,15 @@ class LicenseStatus(StrEnum):
     REVOKED = "revoked"
     SUSPENDED = "suspended"
     INVALID = "invalid"
+    OTHER_INSTALLATION = "other_installation"
+    CLOCK_BEHIND = "clock_behind"
+
+
+OTHER_INSTALLATION_REASON = (
+    "Esta licencia es de otra instalación: el sistema queda en solo lectura. Para reactivarla, "
+    "envía a 1A-MIG lo que muestra `manage.py license fingerprint` en este servidor y te "
+    "enviaremos una licencia para él."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,8 +98,10 @@ class License:
     limits: LicenseLimits = field(default_factory=LicenseLimits)
     modules: tuple[str, ...] = ()
     # Ties the key to one customer database. Re-pointing the deployment at a
-    # copy of the data does not silently reuse the licence.
+    # copy of the data does not silently reuse the licence. Only checked for a
+    # licence with no installation, which v1 tokens never have.
     database_fingerprint: str = ""
+    installation: InstallationFingerprint = field(default_factory=InstallationFingerprint)
 
     def allows_module(self, code: str) -> bool:
         return not self.modules or code in self.modules
@@ -146,6 +159,12 @@ def issue(license_: License, signing_key: Ed25519PrivateKey) -> str:
         },
         "fingerprint": license_.database_fingerprint,
     }
+    if license_.installation.is_bound:
+        payload["installation"] = {
+            "id": license_.installation.installation_id,
+            "pg": license_.installation.pg_system_id,
+            "machine": license_.installation.machine_id,
+        }
     body = _b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
     return f"{body}.{_b64encode(signing_key.sign(body.encode()))}"
 
@@ -222,6 +241,7 @@ def _check_hmac(body: str, signature: str, secret: str) -> None:
 
 def _license_from(payload: dict[str, Any]) -> License:
     limits = payload.get("limits") or {}
+    installation = payload.get("installation") or {}
     return License(
         tenant_code=payload["tenant"],
         plan=payload["plan"],
@@ -237,6 +257,11 @@ def _license_from(payload: dict[str, Any]) -> License:
         ),
         modules=tuple(payload.get("modules") or ()),
         database_fingerprint=payload.get("fingerprint", ""),
+        installation=InstallationFingerprint(
+            installation_id=str(installation.get("id", "")),
+            pg_system_id=str(installation.get("pg", "")),
+            machine_id=str(installation.get("machine", "")),
+        ),
     )
 
 
@@ -244,19 +269,27 @@ def evaluate(
     license_: License,
     *,
     today: date | None = None,
+    now: datetime | None = None,
     revoked: frozenset[str] = frozenset(),
     suspended: bool = False,
     database_fingerprint: str | None = None,
+    installation: InstallationFingerprint | None = None,
+    clock_floor: datetime | None = None,
 ) -> LicenseVerdict:
-    today = today or datetime.now(UTC).date()
+    """Worst first. An expired licence stays expired wherever it runs; the
+    installation and the clock only ever take writing away, never reading."""
+    now = now or datetime.now(UTC)
+    today = today or now.date()
     days_left = license_.valid_until.toordinal() - today.toordinal()
+    bound = license_.installation.is_bound
 
     if license_.license_id in revoked:
         return LicenseVerdict(LicenseStatus.REVOKED, True, days_left, "licencia revocada")
     if suspended:
         return LicenseVerdict(LicenseStatus.SUSPENDED, True, days_left, "servicio suspendido")
     if (
-        license_.database_fingerprint
+        not bound
+        and license_.database_fingerprint
         and database_fingerprint is not None
         and license_.database_fingerprint != database_fingerprint
     ):
@@ -266,14 +299,23 @@ def evaluate(
             LicenseStatus.INVALID, True, days_left,
             "la licencia no corresponde a esta base de datos",
         )
-    if days_left >= 0:
-        return LicenseVerdict(LicenseStatus.ACTIVE, False, days_left)
-    if today <= license_.grace_until():
+    if days_left < 0 and today > license_.grace_until():
+        return LicenseVerdict(LicenseStatus.EXPIRED, True, days_left, "licencia vencida")
+    if bound and installation is not None and not belongs_to(license_.installation, installation):
+        return LicenseVerdict(LicenseStatus.OTHER_INSTALLATION, True, days_left, OTHER_INSTALLATION_REASON)
+    if days_left < 0:
         return LicenseVerdict(
             LicenseStatus.GRACE, True, days_left,
             "licencia vencida: el sistema está en solo lectura",
         )
-    return LicenseVerdict(LicenseStatus.EXPIRED, True, days_left, "licencia vencida")
+    if clock_floor is not None and is_behind(now, clock_floor):
+        return LicenseVerdict(
+            LicenseStatus.CLOCK_BEHIND, True, days_left,
+            f"La fecha del servidor ({now:%Y-%m-%d %H:%M} UTC) es anterior a la última registrada "
+            f"({clock_floor:%Y-%m-%d %H:%M} UTC): el sistema queda en solo lectura hasta que se "
+            "corrija la hora del servidor.",
+        )
+    return LicenseVerdict(LicenseStatus.ACTIVE, False, days_left)
 
 
 def check_limit(license_: License, resource: str, current_count: int) -> bool:
