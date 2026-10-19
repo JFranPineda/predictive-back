@@ -7,4 +7,4 @@ signing half never leaves the issuing machine.
 Empty means no key was generated yet, and no v2 licence verifies.
 """
 
-PUBLIC_KEY = ""
+PUBLIC_KEY = "SlGKtsjX7sQIMsrKpK6Xu2M3qkOjNHo+bv0lRr8PLDs="

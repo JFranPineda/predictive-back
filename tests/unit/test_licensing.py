@@ -10,6 +10,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
+from modules.licensing.domain import signing_key
 from modules.licensing.domain.license import (
     BadSignature,
     License,
@@ -30,6 +31,7 @@ from modules.licensing.domain.signing import (
     decrypt_signing_key,
     encrypt_signing_key,
     generate_signing_key,
+    load_public_key,
     public_key_text,
 )
 
@@ -140,6 +142,11 @@ class TestTransition:
         keys = TrustedKeys(public_key=KEYS.public_key, legacy_secret=SECRET)
         with pytest.raises(MalformedToken):
             verify(f"{_encode(payload)}.c2lnbmF0dXJl", keys)
+
+
+def test_the_program_ships_a_valid_public_key():
+    # A mangled key here turns every customer's licence invalid at once.
+    load_public_key(signing_key.PUBLIC_KEY)
 
 
 class TestSigningKeyFile:
