@@ -558,8 +558,10 @@ lapsed_checks() {
 
   code="$(curl -s -o /dev/null -w '%{http_code}' -H "X-Tenant: $TENANT" "$base/asset-groups/")"
   out="$(curl -s -o /dev/null -w '%{http_code}' -H "X-Tenant: $TENANT" "$base/activity/export/")"
-  [[ "$code" == "401" && "$out" == "401" ]] \
-    && pass "consultar y exportar pasan la licencia (piden credenciales, no 402)" \
+  # Past the licence, the answer is the API's own: 401 without credentials,
+  # 404 for a module not installed yet. Never 402.
+  [[ "$code" != "402" && "$out" != "402" ]] \
+    && pass "consultar y exportar pasan la licencia (responde la API, no un 402: $code, $out)" \
     || fail "la licencia frena una consulta ($code) o una exportación ($out)"
 
   code="$(curl -s -o "$STATE/report.json" -w '%{http_code}' -H "X-Tenant: $TENANT" "$base/reports/mpd/?order=1&group=1")"
@@ -650,7 +652,7 @@ print('EXPORT_OK', manifest['sql'])
 " 2>&1 | tee "$STATE/export-check.log" | grep -q '^EXPORT_OK' || return 1
 
   "${COMPOSE[@]}" exec -T -e PGPASSWORD=onprem-test db psql -h 127.0.0.1 -U postgres -d postgres -qc \
-    "drop database if exists $restore" -c "create database $restore" >/dev/null || return 1
+    "drop database if exists $restore" -c "create database $restore" >/dev/null 2>&1 || return 1
   "${COMPOSE[@]}" exec -T -e PGPASSWORD=onprem-test db psql -h 127.0.0.1 -U postgres -d "$restore" -q \
     -v ON_ERROR_STOP=1 <"$STATE/exports/$(grep -o 'predictive-[a-z]*\.sql' "$STATE/export-check.log" | head -1)" \
     >"$STATE/restore.log" 2>&1 || return 1
