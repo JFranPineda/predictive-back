@@ -136,12 +136,19 @@ start() {
   exit 1
 }
 
+stop_renewal() {
+  [[ -f "$STATE/renewal.pid" ]] || return 0
+  kill -TERM -- "-$(cat "$STATE/renewal.pid")" 2>/dev/null || kill "$(cat "$STATE/renewal.pid")" 2>/dev/null || true
+  rm -f "$STATE/renewal.pid"
+  for _ in $(seq 1 20); do
+    ss -ltnH "( sport = :$RENEWAL_PORT )" | grep -q . || return 0
+    sleep 0.25
+  done
+}
+
 stop() {
   # The renewal service too, if a check was cut short before stopping it.
-  if [[ -f "$STATE/renewal.pid" ]]; then
-    kill -TERM -- "-$(cat "$STATE/renewal.pid")" 2>/dev/null || kill "$(cat "$STATE/renewal.pid")" 2>/dev/null || true
-    rm -f "$STATE/renewal.pid"
-  fi
+  stop_renewal
   [[ -f "$STATE/api.pid" ]] || return 0
   local pid
   pid="$(cat "$STATE/api.pid")"
@@ -768,8 +775,20 @@ renewal_env() {
 online_checks() {
   local here="$1" url="http://127.0.0.1:$RENEWAL_PORT/renew" before after out queries file
   renewal_server migrate --verbosity 0
-  (renewal_env && setsid "$RENEWAL_DIR/.venv/bin/python" manage.py runserver "127.0.0.1:$RENEWAL_PORT" \
-    --noreload >"$STATE/renewal.log" 2>&1 & echo $! >"$STATE/renewal.pid")
+  # A service left by a run cut short would answer instead of this one, with
+  # whatever code and database it started with: end it, or refuse to go on.
+  stop_renewal
+  if ss -ltnH "( sport = :$RENEWAL_PORT )" | grep -q .; then
+    fail "el puerto $RENEWAL_PORT está ocupado por otro proceso: no se prueba el servicio de renovación"
+    return 0
+  fi
+  # Only the server goes to the background, so $! is its own pid (and, after
+  # setsid, its process group): the one stop_renewal ends.
+  (renewal_env && {
+    setsid "$RENEWAL_DIR/.venv/bin/python" manage.py runserver "127.0.0.1:$RENEWAL_PORT" \
+      --noreload >"$STATE/renewal.log" 2>&1 &
+    echo $! >"$STATE/renewal.pid"
+  })
   for _ in $(seq 1 40); do
     curl -s -o /dev/null "http://127.0.0.1:$RENEWAL_PORT/admin/login/" && break
     sleep 0.25
@@ -804,8 +823,7 @@ with override_settings(LICENSE_RENEW_URL='$url'):
     && pass "cada consulta queda registrada con lo que se envió: license log" \
     || fail "las consultas no quedaron en el registro local: ${out:0:300}"
 
-  kill -TERM -- "-$(cat "$STATE/renewal.pid")" 2>/dev/null || kill "$(cat "$STATE/renewal.pid")" 2>/dev/null || true
-  rm -f "$STATE/renewal.pid"
+  stop_renewal
 }
 
 down() {
