@@ -32,6 +32,8 @@ class LicenseStatusView(APIView):
                 "days_left": verdict.days_left,
                 "reason": verdict.reason,
                 "should_warn": verdict.should_warn,
+                # Lapsed: reading and exporting only (v4 Phase 4).
+                "lapsed": verdict.lapsed,
                 "valid_until": record.valid_until.isoformat() if record else None,
                 # On-premise renews by file or online (v4 Phase 3); hosted we renew ourselves.
                 "renewable": tenant.deployment == "on_premise",

@@ -18,9 +18,12 @@ public half shipped in the program. v1 signed with a shared HMAC secret, which
 would have meant installing the signing credential everywhere; it is accepted
 only while the move to v2 lasts, and only where that secret is configured.
 
-Expiry degrades before it blocks: read-only during the grace period, then
-refusal. Cutting a maintenance team off mid-round because an invoice is three
-days late makes an enemy, not a payment.
+Expiry degrades in two steps. During the grace period, read-only. After it,
+the subscription has lapsed: the customer still reads and exports everything,
+and no longer records work or issues reports (v4 Phase 4). Cutting a
+maintenance team off mid-round because an invoice is three days late makes an
+enemy, not a payment; holding their data hostage would make it worse, and the
+exit guarantee in the contract says it never happens.
 """
 
 from __future__ import annotations
@@ -67,6 +70,23 @@ class LicenseStatus(StrEnum):
     INVALID = "invalid"
     OTHER_INSTALLATION = "other_installation"
     CLOCK_BEHIND = "clock_behind"
+
+
+class Access(StrEnum):
+    """What a request does, as far as the licence is concerned."""
+
+    READ = "read"
+    EXPORT = "export"
+    REPORT = "report"
+    WRITE = "write"
+
+
+# What still works once the subscription has lapsed, in the customer's words.
+LAPSED_RULE = "puedes consultar y exportar tus datos, pero no registrar trabajo ni emitir informes."
+
+
+def lapsed_reason(cause: str) -> str:
+    return f"{cause}: {LAPSED_RULE}"
 
 
 OTHER_INSTALLATION_REASON = (
@@ -118,11 +138,21 @@ class LicenseVerdict:
     reason: str = ""
 
     @property
-    def blocks(self) -> bool:
+    def lapsed(self) -> bool:
+        """No subscription in force: reading and exporting only."""
         return self.status in {
             LicenseStatus.EXPIRED, LicenseStatus.REVOKED,
             LicenseStatus.SUSPENDED, LicenseStatus.INVALID,
         }
+
+    def allows(self, access: Access) -> bool:
+        """Reading and exporting are never taken away: the data is the
+        customer's whatever happens to the licence."""
+        if access is Access.WRITE:
+            return not self.read_only
+        if access is Access.REPORT:
+            return not self.lapsed
+        return True
 
     @property
     def should_warn(self) -> bool:
@@ -284,9 +314,13 @@ def evaluate(
     bound = license_.installation.is_bound
 
     if license_.license_id in revoked:
-        return LicenseVerdict(LicenseStatus.REVOKED, True, days_left, "licencia revocada")
+        return LicenseVerdict(
+            LicenseStatus.REVOKED, True, days_left, lapsed_reason("La licencia fue revocada")
+        )
     if suspended:
-        return LicenseVerdict(LicenseStatus.SUSPENDED, True, days_left, "servicio suspendido")
+        return LicenseVerdict(
+            LicenseStatus.SUSPENDED, True, days_left, lapsed_reason("El servicio está suspendido")
+        )
     if (
         not bound
         and license_.database_fingerprint
@@ -297,10 +331,13 @@ def evaluate(
         # deployment at a different one is a different installation.
         return LicenseVerdict(
             LicenseStatus.INVALID, True, days_left,
-            "la licencia no corresponde a esta base de datos",
+            lapsed_reason("La licencia no corresponde a esta base de datos"),
         )
     if days_left < 0 and today > license_.grace_until():
-        return LicenseVerdict(LicenseStatus.EXPIRED, True, days_left, "licencia vencida")
+        return LicenseVerdict(
+            LicenseStatus.EXPIRED, True, days_left,
+            lapsed_reason(f"La suscripción venció el {license_.valid_until.isoformat()} y terminó la gracia"),
+        )
     if bound and installation is not None and not belongs_to(license_.installation, installation):
         return LicenseVerdict(LicenseStatus.OTHER_INSTALLATION, True, days_left, OTHER_INSTALLATION_REASON)
     if days_left < 0:

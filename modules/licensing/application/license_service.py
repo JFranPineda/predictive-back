@@ -28,6 +28,7 @@ from modules.licensing.domain.license import (
     LicenseVerdict,
     TrustedKeys,
     evaluate,
+    lapsed_reason,
     verify,
 )
 from modules.licensing.domain.usage import Usage, limit_message
@@ -42,13 +43,14 @@ def current_verdict(tenant_code: str, *, keys: TrustedKeys, suspended: bool = Fa
 
     record = latest_record(tenant_code)
     if record is None:
-        return LicenseVerdict(LicenseStatus.INVALID, True, 0, "no hay licencia para este cliente")
+        reason = lapsed_reason("No hay licencia para este cliente")
+        return LicenseVerdict(LicenseStatus.INVALID, True, 0, reason)
 
     try:
         license_ = verify(record.token, keys)
     except LicenseError as exc:
         _log(tenant_code, "blocked", f"token inválido: {exc}")
-        return LicenseVerdict(LicenseStatus.INVALID, True, 0, "licencia no válida")
+        return LicenseVerdict(LicenseStatus.INVALID, True, 0, lapsed_reason("La licencia no es válida"))
 
     from modules.licensing.infrastructure.installation import installation_id, observed_installation
 
@@ -68,7 +70,7 @@ def current_verdict(tenant_code: str, *, keys: TrustedKeys, suspended: bool = Fa
         ),
         clock_floor=_clock_floor(tenant, license_, now, installation) if tenant else None,
     )
-    if verdict.blocks:
+    if verdict.lapsed:
         _log(tenant_code, "blocked", verdict.reason)
     elif verdict.read_only:
         _log(tenant_code, "degraded", verdict.reason)

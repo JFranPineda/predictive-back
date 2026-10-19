@@ -14,6 +14,8 @@ data/*.sqlite3-shm
 data/media/
 # This installation's identity and remembered date (v4 Phase 2).
 data/installation.json
+# Full exports waiting to be downloaded: customer data, never versioned.
+data/exports/
 # Copies taken before risky work; never versioned (they hold customer data).
 data/backups/
 # The on-premise test bench keeps its media, history and env out of data/.

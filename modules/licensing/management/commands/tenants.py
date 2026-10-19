@@ -7,6 +7,7 @@
     tenants reissue ambev --signing-key ~/claves/predictive-signing.pem
     tenants reissue ipsa --signing-key <file> --installation <code from license fingerprint>
     tenants revoke ambev --reason "contrato terminado"
+    tenants export ipsa [--out <folder>]     # everything, whatever the licence (v4 Phase 4)
     tenants run ambev <command> [args…]
 """
 
@@ -46,7 +47,7 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument(
-            "action", choices=["list", "add", "migrate", "issue", "reissue", "revoke", "run"]
+            "action", choices=["list", "add", "migrate", "issue", "reissue", "revoke", "run", "export"]
         )
         parser.add_argument("code", nargs="?")
         parser.add_argument("name", nargs="?")
@@ -67,7 +68,8 @@ class Command(BaseCommand):
         parser.add_argument("--reason", default="")
         parser.add_argument("--signing-key", help="the encrypted signing key (issue, reissue)")
         parser.add_argument("--password-file", help="read its password from this file instead of asking")
-        parser.add_argument("--out", default="", help="issue, reissue: also write the .lic file to send")
+        parser.add_argument("--out", default="",
+                            help="issue, reissue: also write the .lic file to send · export: the folder")
         parser.add_argument("--installation", default="",
                             help="bind the licence to this installation code (license fingerprint)")
 
@@ -205,6 +207,21 @@ class Command(BaseCommand):
         record.save(update_fields=["revoked_at", "revoked_reason"])
         LicenseEvent.objects.create(tenant=record.tenant, kind="revoked", detail=options["reason"])
         self.stdout.write(self.style.WARNING(f"revocada: {record.license_id}"))
+
+    def _export(self, options):
+        """The exit guarantee from the console: no licence check stands in the way."""
+        from pathlib import Path
+
+        from modules.licensing.application.tenant_export import export_tenant
+
+        code, _ = self._require(options)
+        resolve(code)
+        summary = export_tenant(code, Path(options["out"] or "."))
+        self.stdout.write(self.style.SUCCESS(
+            f"{summary.tables} tablas, {summary.rows} filas, {summary.files} archivos "
+            f"({summary.size / 1_048_576:.1f} MB)"
+        ))
+        self.stdout.write(str(summary.path))
 
     def _run(self, options):
         """Runs any management command against one customer database."""

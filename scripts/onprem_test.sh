@@ -54,6 +54,7 @@ bench_env() {
   export INSTALLATION_FILE=.onprem-test/installation.json
   # No renewal service unless a check sets one: the bench never goes online.
   export LICENSE_RENEW_URL=
+  export EXPORT_ROOT=.onprem-test/exports
   export BASE_DOMAIN=
   # A tenant URL in .env would win over the bench registry and send a request
   # to a development database. Exported empty, .env can no longer set it.
@@ -175,6 +176,9 @@ sys.exit(0 if d.get("status") == "active" and d.get("deployment") == "on_premise
 
   echo "Renovación"
   renewal_checks
+
+  echo "Caducidad"
+  lapsed_checks
 
   echo "Aislamiento"
   code="$(curl -s -o /dev/null -w '%{http_code}' -H "X-Tenant: ambev" "$base/license/status/")"
@@ -522,6 +526,175 @@ print('OUTSIDE', [address for address in connects if not (isinstance(address, tu
     online_checks "$here"
   else
     echo "  · sin $RENEWAL_DIR: no se prueba el servidor de renovación"
+  fi
+}
+
+# Phase 4: a lapsed subscription still reads and exports everything, and no
+# longer records work or issues reports. The licence in force is revoked for
+# the checks (revoked behaves like expired) and a new one restores it.
+lapsed_checks() {
+  local base="http://127.0.0.1:$API_PORT/api/v1" here body code headers admin dir zip out
+  here="$(manage license fingerprint --tenant "$TENANT" --code 2>/dev/null || true)"
+  admin="$(bench_token admin@simiai.pe)"
+  if [[ -n "$admin" ]]; then
+    upload_sample "$admin"
+  fi
+  manage tenants revoke "$TENANT" --reason "banco: suscripción caducada" >/dev/null
+
+  body="$(api_status)"
+  [[ "$(field "$body" status)" == "revoked" && "$(field "$body" lapsed)" == "True" ]] \
+    && pass "revocada: la licencia queda caducada (consultar y exportar)" \
+    || fail "la licencia revocada no se informa como caducada: $body"
+
+  headers="$(curl -s -D - -o "$STATE/write.json" -X POST -H "X-Tenant: $TENANT" \
+    -H "Content-Type: application/json" -d '{}' "$base/service-visits/1/readings/bulk/")"
+  if [[ "$headers" == *" 402 "* && "$headers" == *"X-License-Status: revoked"* \
+    && "$(field "$(cat "$STATE/write.json")" type)" == "license_read_only" \
+    && "$(field "$(cat "$STATE/write.json")" title)" == *"consultar y exportar"* ]]; then
+    pass "registrar una lectura responde 402 y dice qué sigue funcionando"
+  else
+    fail "registrar una lectura no responde 402 con su motivo: $(head -c 300 "$STATE/write.json")"
+  fi
+
+  code="$(curl -s -o /dev/null -w '%{http_code}' -H "X-Tenant: $TENANT" "$base/asset-groups/")"
+  out="$(curl -s -o /dev/null -w '%{http_code}' -H "X-Tenant: $TENANT" "$base/activity/export/")"
+  [[ "$code" == "401" && "$out" == "401" ]] \
+    && pass "consultar y exportar pasan la licencia (piden credenciales, no 402)" \
+    || fail "la licencia frena una consulta ($code) o una exportación ($out)"
+
+  code="$(curl -s -o "$STATE/report.json" -w '%{http_code}' -H "X-Tenant: $TENANT" "$base/reports/mpd/?order=1&group=1")"
+  [[ "$code" == "402" && "$(field "$(cat "$STATE/report.json")" type)" == "license_report_blocked" ]] \
+    && pass "los informes de trabajo quedan bloqueados (402)" \
+    || fail "un informe MPd no quedó bloqueado (HTTP $code)"
+
+  dir="$STATE/exports/cli"
+  rm -rf "$dir" && mkdir -p "$dir"
+  out="$(manage tenants export "$TENANT" --out "$dir" 2>&1)" || true
+  zip="$(ls "$dir"/*.zip 2>/dev/null | head -1 || true)"
+  if [[ -n "$zip" ]] && export_is_complete "$zip"; then
+    pass "tenants export vuelca todo con la suscripción caducada: tablas, SQL restaurable y archivos"
+  else
+    fail "tenants export no produjo un volcado completo: ${out:0:300}"
+  fi
+
+  if [[ -n "$admin" ]]; then
+    ui_export_checks "$admin"
+  fi
+
+  psql_app "update licensing_tenant set is_suspended = true where code = '$TENANT'" predictive_control >/dev/null
+  code="$(curl -s -o /dev/null -w '%{http_code}' -H "X-Tenant: $TENANT" "$base/reports/end/?order=1")"
+  out="$(curl -s -o /dev/null -w '%{http_code}' -H "X-Tenant: $TENANT" "$base/asset-groups/")"
+  psql_app "update licensing_tenant set is_suspended = false where code = '$TENANT'" predictive_control >/dev/null
+  [[ "$code" == "402" && "$out" == "401" ]] \
+    && pass "suspendida se comporta igual: consulta sí, informe no" \
+    || fail "suspendida: informe $code, consulta $out"
+
+  manage tenants issue "$TENANT" "${SIGN[@]}" "${TERMS[@]}" --months "$(( $(past_months_from_db) + 1 ))" \
+    --installation "$here" >/dev/null
+  [[ "$(field "$(api_status)" status)" == "active" ]] \
+    && pass "una licencia nueva devuelve todo a la normalidad" \
+    || fail "tras la licencia nueva no vuelve a active: $(api_status)"
+
+  [[ "$(verdict_at $(( ($(past_months_from_db) + 3) * 31 * 24 )))" == "expired" ]] \
+    && pass "vencida y pasada la gracia, el veredicto es expired (caducada como revocada)" \
+    || fail "pasada la gracia el veredicto no es expired"
+  manage license clock reset --tenant "$TENANT" >/dev/null
+}
+
+# Months from today to the licence in force, read from the control plane: the
+# API cannot say days_left of a revoked licence the same way.
+past_months_from_db() {
+  psql_app "select greatest(0, (max(valid_until) - current_date) / 28) from licensing_licenserecord r
+    join licensing_tenant t on t.id = r.tenant_id where t.code = '$TENANT'" predictive_control
+}
+
+# One real photo, so the export has a file to carry.
+upload_sample() {
+  local visit
+  visit="$(psql_app "select min(id) from services_servicevisit")"
+  [[ -n "$visit" ]] || return 0
+  "$PYTHON" -c 'from PIL import Image; Image.new("RGB", (8, 8), (200, 30, 30)).save("'"$STATE"'/sample.png")'
+  curl -s -o /dev/null -H "X-Tenant: $TENANT" -H "Authorization: Bearer $1" \
+    -F "file=@$STATE/sample.png" -F kind=photo -F owner_type=visit -F "owner_id=$visit" \
+    "http://127.0.0.1:$API_PORT/api/v1/media/"
+}
+
+# Every table in the manifest has its rows in the workbook, the SQL restores
+# into an empty database with the same counts, and every file is there.
+export_is_complete() {
+  local zip="$1" restore=restore_check
+  manage shell --verbosity 0 -c "
+import json, sys, zipfile
+from openpyxl import load_workbook
+from django.db import connections
+from modules.licensing.domain.export import EXCLUDED_TABLES
+from modules.licensing.infrastructure.context import ensure_registered
+archive = zipfile.ZipFile('$zip')
+names = set(archive.namelist())
+manifest = json.loads(archive.read('manifiesto.json'))
+assert {'LEEME.txt', 'datos.xlsx', 'manifiesto.json', manifest['sql']} <= names, names
+alias = ensure_registered('$TENANT')
+with connections[alias].cursor() as cursor:
+    tables = [t for t in connections[alias].introspection.table_names(cursor) if t not in EXCLUDED_TABLES]
+    for table in tables:
+        cursor.execute(f'select count(*) from "{table}"')
+        assert manifest['tables'][table]['rows'] == cursor.fetchone()[0], table
+    cursor.execute(\"select (select count(distinct original_key) from media_mediaasset where original_key <> '') + (select count(distinct data_key) from measurements_spectrum where data_key <> '')\")
+    assert manifest['files'] + len(manifest['missing_files']) == cursor.fetchone()[0]
+workbook = load_workbook(archive.open('datos.xlsx'), read_only=True)
+for table, entry in manifest['tables'].items():
+    assert sum(sum(1 for _ in workbook[sheet].iter_rows()) - 1 for sheet in entry['sheets']) == entry['rows'], table
+assert sum(1 for name in names if name.startswith('archivos/') and not name.endswith('/')) == manifest['files']
+archive.extract(manifest['sql'], '$STATE/exports')
+print('EXPORT_OK', manifest['sql'])
+" 2>&1 | tee "$STATE/export-check.log" | grep -q '^EXPORT_OK' || return 1
+
+  "${COMPOSE[@]}" exec -T -e PGPASSWORD=onprem-test db psql -h 127.0.0.1 -U postgres -d postgres -qc \
+    "drop database if exists $restore" -c "create database $restore" >/dev/null || return 1
+  "${COMPOSE[@]}" exec -T -e PGPASSWORD=onprem-test db psql -h 127.0.0.1 -U postgres -d "$restore" -q \
+    -v ON_ERROR_STOP=1 <"$STATE/exports/$(grep -o 'predictive-[a-z]*\.sql' "$STATE/export-check.log" | head -1)" \
+    >"$STATE/restore.log" 2>&1 || return 1
+  "$PYTHON" - "$zip" <<'EOF' >"$STATE/restore-counts.sql"
+import json, sys, zipfile
+manifest = json.loads(zipfile.ZipFile(sys.argv[1]).read("manifiesto.json"))
+print(" union all ".join(
+    f"select '{table}' as t, count(*) as n, {entry['rows']} as expected from \"{table}\""
+    for table, entry in manifest["tables"].items()
+) + ";")
+EOF
+  local mismatches
+  mismatches="$("${COMPOSE[@]}" exec -T -e PGPASSWORD=onprem-test db psql -h 127.0.0.1 -U postgres \
+    -d "$restore" -tA -c "select t from ($(cat "$STATE/restore-counts.sql" | tr -d ';')) c where n <> expected")"
+  "${COMPOSE[@]}" exec -T -e PGPASSWORD=onprem-test db psql -h 127.0.0.1 -U postgres -d postgres -qc \
+    "drop database $restore" >/dev/null
+  [[ -z "$mismatches" ]]
+}
+
+# The administrator's own road: started from the licence screen, prepared in
+# the background, downloaded when ready.
+ui_export_checks() {
+  local admin="$1" base="http://127.0.0.1:$API_PORT/api/v1" engineer body id code status
+  engineer="$(bench_token carlos.balta@simiai.pe)"
+  code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "X-Tenant: $TENANT" \
+    -H "Authorization: Bearer $engineer" "$base/license/export/")"
+  [[ "$code" == "403" ]] && pass "sin el permiso de exportar, la API no lanza el volcado" \
+    || fail "un ingeniero lanzó el volcado (HTTP $code)"
+
+  body="$(curl -s -X POST -H "X-Tenant: $TENANT" -H "Authorization: Bearer $admin" "$base/license/export/")"
+  id="$(field "$body" id)"
+  for _ in $(seq 1 120); do
+    body="$(curl -s -H "X-Tenant: $TENANT" -H "Authorization: Bearer $admin" "$base/license/export/")"
+    status="$(field "$body" status)"
+    [[ "$status" == "done" || "$status" == "failed" ]] && break
+    sleep 1
+  done
+  code="$(curl -s -o "$STATE/exports/ui.zip" -w '%{http_code}' -H "X-Tenant: $TENANT" \
+    -H "Authorization: Bearer $admin" "$base/license/export/$id/download/")"
+  if [[ "$status" == "done" && "$code" == "200" ]] && "$PYTHON" -c 'import sys, zipfile
+sys.exit(0 if "manifiesto.json" in zipfile.ZipFile(sys.argv[1]).namelist() else 1)' "$STATE/exports/ui.zip"; then
+    pass "el administrador lanza el volcado desde la API, se prepara aparte y lo descarga, caducada"
+  else
+    fail "el volcado desde la API no terminó o no se descargó ($status, HTTP $code): $body"
   fi
 }
 

@@ -190,7 +190,7 @@ class TestLifecycle:
     def test_inside_the_term_it_just_works(self):
         verdict = evaluate(AMBEV, today=date(2026, 6, 1), database_fingerprint="fp-ambev")
         assert verdict.status is LicenseStatus.ACTIVE
-        assert not verdict.read_only and not verdict.blocks
+        assert not verdict.read_only and not verdict.lapsed
 
     def test_warns_a_month_out(self):
         assert evaluate(AMBEV, today=date(2026, 12, 10)).should_warn
@@ -200,15 +200,15 @@ class TestLifecycle:
         # enemy, not a payment.
         verdict = evaluate(AMBEV, today=date(2027, 1, 5))
         assert verdict.status is LicenseStatus.GRACE
-        assert verdict.read_only and not verdict.blocks
+        assert verdict.read_only and not verdict.lapsed
 
     def test_after_the_grace_period_it_blocks(self):
         verdict = evaluate(AMBEV, today=date(2027, 1, 20))
-        assert verdict.status is LicenseStatus.EXPIRED and verdict.blocks
+        assert verdict.status is LicenseStatus.EXPIRED and verdict.lapsed
 
     def test_revocation_is_immediate(self):
         verdict = evaluate(AMBEV, today=date(2026, 6, 1), revoked=frozenset({"lic-0001"}))
-        assert verdict.status is LicenseStatus.REVOKED and verdict.blocks
+        assert verdict.status is LicenseStatus.REVOKED and verdict.lapsed
 
     def test_suspension_blocks_without_touching_the_token(self):
         verdict = evaluate(AMBEV, today=date(2026, 6, 1), suspended=True)

@@ -98,13 +98,13 @@ class TestVerdict:
     def test_another_installation_reads_but_does_not_write(self):
         verdict = evaluate(_licence(), today=TODAY, installation=_elsewhere(pg_system_id="x", machine_id="y"))
         assert verdict.status is LicenseStatus.OTHER_INSTALLATION
-        assert verdict.read_only and not verdict.blocks
+        assert verdict.read_only and not verdict.lapsed
         assert "license fingerprint" in verdict.reason
 
     def test_an_expired_licence_elsewhere_is_still_expired(self):
         elsewhere = _elsewhere(pg_system_id="x", machine_id="y")
         verdict = evaluate(_licence(), today=date(2027, 6, 1), installation=elsewhere)
-        assert verdict.status is LicenseStatus.EXPIRED and verdict.blocks
+        assert verdict.status is LicenseStatus.EXPIRED and verdict.lapsed
 
     def test_a_bound_licence_ignores_the_old_database_fingerprint(self):
         # Moving the database is normal IT work: two of three decide, not the

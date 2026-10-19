@@ -122,6 +122,10 @@ MACHINE_ID_FILE = "/etc/machine-id"
 # file only. The customer's IT decides whether this server may reach it.
 LICENSE_RENEW_URL = os.environ.get("LICENSE_RENEW_URL", "")
 
+# Where full exports are prepared for download (v4 Phase 4). Only the latest
+# per tenant is kept: each is a copy of everything, files included.
+EXPORT_ROOT = BASE_DIR / os.environ.get("EXPORT_ROOT", "data/exports")
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "modules.security.interfaces.authentication.TenantJWTAuthentication",

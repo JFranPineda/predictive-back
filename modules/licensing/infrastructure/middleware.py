@@ -6,11 +6,14 @@ can only ask once you know which database to look in.
 
 from __future__ import annotations
 
+import re
+
 from django.conf import settings
 from django.http import JsonResponse
 
 from modules.licensing.application.license_service import current_verdict
 from modules.licensing.application.tenant_resolver import UnknownTenant, resolve, tenant_from_host
+from modules.licensing.domain.license import Access
 from modules.licensing.infrastructure.context import set_current_tenant
 from modules.licensing.infrastructure.keys import trusted_keys
 
@@ -25,6 +28,33 @@ LICENSE_EXEMPT_PREFIXES = (
     "/api/docs",
     "/admin/",
 )
+
+# Once the subscription lapses (v4 Phase 4) the customer still reads and
+# exports, and no longer records work or issues reports. Both lists are
+# declared once, here, short enough to review: a report misfiled as data would
+# let work go on unpaid, an export left out would hold the customer's data.
+# The full export lives under /api/v1/license/ and is exempt altogether.
+EXPORT_PATHS = (
+    re.compile(r"^/api/v1/activity/export/$"),
+    re.compile(r"^/api/v1/asset-groups/\d+/matrix/export/$"),
+    re.compile(r"^/api/v1/history/"),
+)
+WORK_REPORT_PATHS = (
+    re.compile(r"^/api/v1/reports/(mpd|end|monthly|corrective)/$"),
+    re.compile(r"^/api/v1/ut-rollers/orders/\d+/groups/\d+/report/$"),
+)
+
+
+def classify(method: str, path: str) -> Access:
+    """Changing data is writing whatever the path; a report is the deliverable
+    we charge for; everything else read is data, the customer's."""
+    if method not in SAFE_METHODS:
+        return Access.WRITE
+    if any(pattern.match(path) for pattern in WORK_REPORT_PATHS):
+        return Access.REPORT
+    if any(pattern.match(path) for pattern in EXPORT_PATHS):
+        return Access.EXPORT
+    return Access.READ
 
 
 class TenantMiddleware:
@@ -54,8 +84,9 @@ class TenantMiddleware:
 
 
 class LicenseMiddleware:
-    """Expiry degrades before it blocks: read-only first, refusal after the
-    grace period. A crew mid-round does not lose its work over an invoice."""
+    """Expiry degrades in steps, and never as far as the customer's data:
+    read-only during the grace period; after it, reading and exporting only.
+    A crew mid-round does not lose its work over an invoice."""
 
     def __init__(self, get_response):
         self.get_response = get_response
@@ -72,12 +103,13 @@ class LicenseMiddleware:
         )
         request.license = verdict
 
-        if verdict.blocks:
-            return _problem("license_blocked", verdict.reason or "Licencia no vigente", 402)
-        if verdict.read_only and request.method not in SAFE_METHODS:
-            return _problem("license_read_only", verdict.reason, 402)
-
-        response = self.get_response(request)
+        access = classify(request.method, request.path)
+        if not verdict.allows(access):
+            code = "license_report_blocked" if access is Access.REPORT else "license_read_only"
+            response = _problem(code, verdict.reason or "Licencia no vigente", 402)
+        else:
+            response = self.get_response(request)
+        # On refusals too: the UI explains the state instead of a blank screen.
         response["X-License-Status"] = verdict.status.value
         response["X-License-Days-Left"] = str(verdict.days_left)
         return response

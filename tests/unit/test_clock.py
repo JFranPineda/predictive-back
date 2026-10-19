@@ -29,7 +29,7 @@ class TestBehind:
     def test_48_hours_behind_reads_but_does_not_write(self):
         verdict = _verdict(SEEN - timedelta(hours=48), SEEN)
         assert verdict.status is LicenseStatus.CLOCK_BEHIND
-        assert verdict.read_only and not verdict.blocks
+        assert verdict.read_only and not verdict.lapsed
         # The dates are what the customer's IT needs to fix the clock.
         assert "2026-10-17" in verdict.reason and "2026-10-19" in verdict.reason
 
@@ -47,7 +47,7 @@ class TestBehind:
         # Judging expiry by the remembered date would turn a clock that once
         # jumped forward into a blocked plant. Read-only is enough.
         verdict = _verdict(SEEN, SEEN + timedelta(days=200))
-        assert verdict.status is LicenseStatus.CLOCK_BEHIND and not verdict.blocks
+        assert verdict.status is LicenseStatus.CLOCK_BEHIND and not verdict.lapsed
 
 
 class TestFloor:
