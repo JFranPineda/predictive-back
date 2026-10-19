@@ -1,0 +1,24 @@
+# Disposable PostgreSQL 16 for the on-premise test bench (predictive-docs
+# docs/v4, Phase 0). Driven by scripts/onprem_test.sh; nothing else uses it.
+#
+# Bound to localhost on 5437 by default: on the development machine 5432 is
+# the system PostgreSQL and 5433-5436 belong to other projects.
+name: predictive-onprem-test
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: onprem-test
+    ports: ["127.0.0.1:${ONPREM_TEST_PG_PORT:-5437}:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d predictive_control"]
+      interval: 2s
+      retries: 30
+
+volumes:
+  pgdata:

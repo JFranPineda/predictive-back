@@ -1,0 +1,44 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: System libraries (PDF reports, HEIC photos)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libheif1 libde265-0 libpango-1.0-0 libpangoft2-1.0-0 libcairo2 \
+            libimage-exiftool-perl
+      - name: Install
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -e ".[dev]"
+      - name: Django check
+        run: .venv/bin/python manage.py check
+      - name: Hexagonal boundaries
+        run: .venv/bin/lint-imports
+      - name: Tests
+        run: .venv/bin/python -m pytest
+      # Ruff is not a gate yet: the repository carries a baseline of older
+      # findings, and gating on them would keep every run red.
+
+      # The on-premise bench without IPSA's books, which live in another
+      # repository: PostgreSQL 16, a plain role, migrations, a tenant and its
+      # licence, then the smoke checks.
+      - name: On-premise bench
+        run: |
+          scripts/onprem_test.sh up
+          scripts/onprem_test.sh start
+          scripts/onprem_test.sh smoke
+      - name: Bench log
+        if: failure()
+        run: cat .onprem-test/api.log || true

@@ -12,5 +12,9 @@ data/*.sqlite3
 data/*.sqlite3-wal
 data/*.sqlite3-shm
 data/media/
+# Copies taken before risky work; never versioned (they hold customer data).
+data/backups/
+# The on-premise test bench keeps its media, history and env out of data/.
+.onprem-test/
 /media/
 /staticfiles/
