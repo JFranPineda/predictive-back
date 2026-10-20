@@ -15,8 +15,9 @@ Since the application also runs on the customer's server, issuing and
 verifying are separate capabilities (v2): we sign with an Ed25519 key that
 never leaves our issuing machine, and every installation verifies with the
 public half shipped in the program. v1 signed with a shared HMAC secret, which
-would have meant installing the signing credential everywhere; it is accepted
-only while the move to v2 lasts, and only where that secret is configured.
+would have meant installing the signing credential everywhere; it was retired
+before the first on-premise delivery (v4 Phase 5) and no secret makes it
+verify.
 
 Expiry degrades in two steps. During the grace period, read-only. After it,
 the subscription has lapsed: the customer still reads and exports everything,
@@ -30,7 +31,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import hmac
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
@@ -45,8 +45,8 @@ from modules.licensing.domain.installation import InstallationFingerprint, belon
 from modules.licensing.domain.signing import SigningKeyError, load_public_key
 
 TOKEN_VERSION = 2
-LEGACY_TOKEN_VERSION = 1
-SUPPORTED_VERSIONS = (LEGACY_TOKEN_VERSION, TOKEN_VERSION)
+# v1 (HMAC) was retired in v4 Phase 5: a v1 token is an unknown version now.
+SUPPORTED_VERSIONS = (TOKEN_VERSION,)
 
 
 class LicenseError(Exception):
@@ -166,8 +166,6 @@ class TrustedKeys:
     """What a verifier holds. Never the signing key."""
 
     public_key: str
-    # v1 (HMAC) tokens, during the move to v2 only. Empty refuses them.
-    legacy_secret: str = ""
 
 
 def issue(license_: License, signing_key: Ed25519PrivateKey) -> str:
@@ -203,24 +201,22 @@ def verify(token: str, keys: TrustedKeys) -> License:
     """Signature first, contents second. Parsing an unverified payload is how
     a forged token gets to choose its own plan.
 
-    The version is the one field read before the signature, because it picks
-    the algorithm. It cannot buy a weaker check: each version has its own key
-    material, and v1 has none unless the legacy secret is configured."""
+    The version is the one field read before the signature, and the only one
+    on the list is v2: there is no weaker check left to choose."""
     body, signature = _split(token)
-    version = _version_of(body)
-    if version == TOKEN_VERSION:
-        _check_ed25519(body, signature, keys.public_key)
-    else:
-        _check_hmac(body, signature, keys.legacy_secret)
+    _version_of(body)
+    _check_ed25519(body, signature, keys.public_key)
     return _license_from(_read(body))
 
 
 def token_version(token: str) -> int | None:
-    """The version a token claims, unverified. For dispatch and for listings."""
+    """The version a token claims, unverified and whether or not it is still
+    accepted: a listing must be able to say "v1" of a retired licence."""
     try:
-        return _version_of(_split(token)[0])
+        version = _read(_split(token)[0]).get("v")
     except MalformedToken:
         return None
+    return version if type(version) is int else None
 
 
 def _split(token: str) -> tuple[str, str]:
@@ -260,13 +256,6 @@ def _check_ed25519(body: str, signature: str, public_key: str) -> None:
         key.verify(_b64decode(signature), body.encode())
     except (InvalidSignature, ValueError) as exc:
         raise BadSignature("signature does not match") from exc
-
-
-def _check_hmac(body: str, signature: str, secret: str) -> None:
-    if not secret:
-        raise BadSignature("v1 tokens need the legacy secret, and none is configured")
-    if not hmac.compare_digest(signature, _hmac(body, secret)):
-        raise BadSignature("signature does not match")
 
 
 def _license_from(payload: dict[str, Any]) -> License:
@@ -366,11 +355,6 @@ def database_fingerprint(*, tenant_code: str, database_name: str, host: str) -> 
     detect a moved or copied installation, not to hide anything."""
     material = f"{tenant_code}|{database_name}|{host}".lower().encode()
     return hashlib.sha256(material).hexdigest()[:32]
-
-
-def _hmac(body: str, secret: str) -> str:
-    digest = hmac.new(secret.encode(), body.encode(), hashlib.sha256).digest()
-    return _b64encode(digest)
 
 
 def _b64encode(raw: bytes) -> str:

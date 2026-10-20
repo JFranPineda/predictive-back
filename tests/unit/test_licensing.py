@@ -39,7 +39,7 @@ SIGNING_KEY = generate_signing_key()
 KEYS = TrustedKeys(public_key=public_key_text(SIGNING_KEY))
 PASSWORD = "a-passphrase-long-enough"
 
-# The v1 secret, and a token the HMAC code minted with it before v2 existed.
+# A token the retired HMAC code minted, kept to prove v1 stays refused.
 SECRET = "server-side-secret-never-shipped-to-a-customer"
 V1_TOKEN = (
     "eyJmaW5nZXJwcmludCI6ImZwLWFtYmV2IiwiZ3JhY2UiOjE1LCJpZCI6ImxpYy0wMDAxIiwiaXNzdWVkIjoiMjAyNi0w"
@@ -113,35 +113,33 @@ class TestToken:
             verify(token, KEYS)
 
 
-class TestTransition:
-    """v1 (HMAC) tokens keep working between reissuing and deploying, and only
-    where the verifier holds the legacy secret."""
+class TestV1Retired:
+    """v1 (HMAC) is gone (v4 Phase 5, before the first delivery): in a
+    customer's server their IT sets the environment, and a shared secret there
+    would let anyone mint a licence. No secret makes a v1 token verify now."""
 
-    def test_a_v1_token_still_verifies_with_the_legacy_secret(self):
-        keys = TrustedKeys(public_key=KEYS.public_key, legacy_secret=SECRET)
+    def test_a_real_v1_token_is_refused(self):
+        # Issued by the HMAC code before v2 existed.
         assert token_version(V1_TOKEN) == 1
-        assert verify(V1_TOKEN, keys) == AMBEV
-
-    def test_without_the_legacy_secret_no_v1_token_verifies(self):
-        # An empty HMAC key is one anyone can compute: no secret, no v1.
-        body = V1_TOKEN.partition(".")[0]
-        anyones = base64.urlsafe_b64encode(hmac.new(b"", body.encode(), hashlib.sha256).digest())
-        with pytest.raises(BadSignature):
-            verify(f"{body}.{anyones.decode().rstrip('=')}", KEYS)
-        with pytest.raises(BadSignature):
+        with pytest.raises(MalformedToken, match="1"):
             verify(V1_TOKEN, KEYS)
 
-    def test_a_v1_token_from_another_secret_is_refused(self):
-        with pytest.raises(BadSignature):
-            verify(V1_TOKEN, TrustedKeys(public_key=KEYS.public_key, legacy_secret="stolen-guess"))
+    def test_a_v1_token_signed_with_an_empty_secret_is_refused(self):
+        # Once, an empty HMAC key was the hole to close; now no HMAC verifies.
+        body = V1_TOKEN.partition(".")[0]
+        anyones = base64.urlsafe_b64encode(hmac.new(b"", body.encode(), hashlib.sha256).digest())
+        with pytest.raises(MalformedToken):
+            verify(f"{body}.{anyones.decode().rstrip('=')}", KEYS)
 
-    @pytest.mark.parametrize("version", [3, 0, None, "2", True])
-    def test_an_unknown_version_is_malformed(self, version):
+    def test_the_verifier_holds_no_secret_at_all(self):
+        assert not hasattr(KEYS, "legacy_secret")
+
+    @pytest.mark.parametrize("version", [1, 3, 0, None, "2", True])
+    def test_only_version_2_is_a_version(self, version):
         # `True == 1` in Python: only the integers on the list are versions.
         payload = {**_payload(issue(AMBEV, SIGNING_KEY)), "v": version}
-        keys = TrustedKeys(public_key=KEYS.public_key, legacy_secret=SECRET)
         with pytest.raises(MalformedToken):
-            verify(f"{_encode(payload)}.c2lnbmF0dXJl", keys)
+            verify(f"{_encode(payload)}.c2lnbmF0dXJl", KEYS)
 
 
 def test_the_program_ships_a_valid_public_key():

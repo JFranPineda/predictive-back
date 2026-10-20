@@ -51,7 +51,8 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument(
-            "action", choices=["keygen", "fingerprint", "clock", "request", "import", "renew", "log"]
+            "action",
+            choices=["keygen", "fingerprint", "clock", "request", "import", "renew", "log", "sign-manifest"],
         )
         parser.add_argument("target", nargs="?", help="clock: reset · import: the .lic file")
         parser.add_argument("--limit", type=int, default=20, help="log: how many queries")
@@ -62,13 +63,15 @@ class Command(BaseCommand):
                             help="keygen: replace the public key the program ships with")
         parser.add_argument("--tenant", default="", help="fingerprint, clock: the tenant (DEFAULT_TENANT)")
         parser.add_argument("--code", action="store_true", help="fingerprint: print only the code")
+        parser.add_argument("--out-manifest", help="sign-manifest: where the manifest goes")
+        parser.add_argument("--out-sig", help="sign-manifest: where its signature goes")
 
     def handle(self, *args, **options):
         if options["action"] == "clock" and options["target"] != "reset":
             raise CommandError("usage: license clock reset [--tenant <code>]")
         if options["action"] == "import" and not options["target"]:
             raise CommandError("usage: license import <file.lic> [--tenant <code>]")
-        getattr(self, f"_{options['action']}")(options)
+        getattr(self, f"_{options['action'].replace('-', '_')}")(options)
 
     def _keygen(self, options):
         if not options["signing_key"]:
@@ -95,6 +98,30 @@ class Command(BaseCommand):
             where = f"escrita en {options['public_key']}"
         self.stdout.write(self.style.SUCCESS(f"clave de firma cifrada en {path}"))
         self.stdout.write(f"clave pública {public} — {where}")
+
+    def _sign_manifest(self, options):
+        """Build the signed integrity manifest of a sealed build. Run in the
+        Docker builder after compiling, with the signing key as a build secret
+        — the key never lands in a layer."""
+        from pathlib import Path
+
+        from modules.licensing.domain.integrity import build_manifest
+        from modules.licensing.domain.signing import SigningKeyError, sign_blob
+        from modules.licensing.infrastructure.signing_key_file import load_signing_key
+
+        if not options["signing_key"]:
+            raise CommandError("--signing-key is required")
+        manifest = build_manifest(Path(settings.BASE_DIR), ("*.so", "*.pyc"))
+        try:
+            key = load_signing_key(options["signing_key"], options["password_file"])
+        except SigningKeyError as exc:
+            raise CommandError(str(exc)) from exc
+        out_manifest = Path(options["out_manifest"] or settings.INTEGRITY_MANIFEST)
+        out_sig = Path(options["out_sig"] or settings.INTEGRITY_SIGNATURE)
+        out_manifest.write_bytes(manifest)
+        out_sig.write_bytes(sign_blob(key, manifest))
+        count = len(manifest.decode().splitlines())
+        self.stdout.write(self.style.SUCCESS(f"manifiesto de {count} archivos firmado en {out_manifest}"))
 
     def _fingerprint(self, options):
         from modules.licensing.infrastructure.installation import observed_installation

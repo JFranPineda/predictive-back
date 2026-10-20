@@ -107,9 +107,6 @@ from modules.licensing.domain import signing_key as _signing_key  # noqa: E402
 
 LICENSE_PUBLIC_KEY = _signing_key.PUBLIC_KEY
 
-# v1 (HMAC) tokens, only while the move to v2 lasts. Empty refuses them: a
-# default here would be a published secret anyone could sign with.
-LICENSE_SECRET = os.environ.get("LICENSE_SECRET", "")
 
 # The installation a licence covers (v4 Phase 2). The file lives in the data
 # volume, so a restore of that volume keeps the installation's identity and its
@@ -125,6 +122,18 @@ LICENSE_RENEW_URL = os.environ.get("LICENSE_RENEW_URL", "")
 # Where full exports are prepared for download (v4 Phase 4). Only the latest
 # per tenant is kept: each is a copy of everything, files included.
 EXPORT_ROOT = BASE_DIR / os.environ.get("EXPORT_ROOT", "data/exports")
+
+# A sealed build (v4 Phase 5) is stamped with the customer, version and build
+# id; the PDFs it makes name them. Empty on a source checkout.
+BUILD_TENANT = os.environ.get("BUILD_TENANT", "")
+BUILD_VERSION = os.environ.get("BUILD_VERSION", "")
+BUILD_ID = os.environ.get("BUILD_ID", "")
+
+# The signed list of files the sealed build ships. Present only in a release
+# image; where it is, the program verifies it at startup and refuses to run if
+# a file was altered (modules/licensing/infrastructure/integrity_check.py).
+INTEGRITY_MANIFEST = BASE_DIR / "integrity.manifest"
+INTEGRITY_SIGNATURE = BASE_DIR / "integrity.sig"
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (

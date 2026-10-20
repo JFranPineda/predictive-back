@@ -41,8 +41,7 @@ bench_env() {
   export DEFAULT_TENANT="$TENANT"
   export SECRET_KEY=onprem-test-only
   # The bench signs with its own throwaway key, never ours, and the API holds
-  # only its public half (dev settings read it from here). No v1 secret.
-  export LICENSE_SECRET=
+  # only its public half (dev settings read it from here).
   if [[ -f "$KEYS/public.key" ]]; then
     LICENSE_PUBLIC_KEY="$(cat "$KEYS/public.key")"
     export LICENSE_PUBLIC_KEY
@@ -283,7 +282,7 @@ signing_checks() {
   pid="$(cat "$STATE/api.pid" 2>/dev/null || true)"
   out="$(tr '\0' '\n' <"/proc/${pid:-0}/environ" 2>/dev/null || true)"
   if [[ -n "$out" ]] && grep -qE '^LICENSE_PUBLIC_KEY=.+' <<<"$out" \
-    && ! grep -qE '^LICENSE_SECRET=.+' <<<"$out" && ! grep -q 'signing-key' <<<"$out"; then
+    && ! grep -q 'signing-key' <<<"$out"; then
     pass "la API resuelve la licencia con la clave pública sola"
   else
     fail "la API corre con algo más que la clave pública (o no corre)"

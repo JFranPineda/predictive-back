@@ -27,6 +27,9 @@ dependencies = [
     "weasyprint>=62",
     # Ed25519 licence signatures (predictive-docs docs/v4, Phase 1).
     "cryptography>=44",
+    # What the image's CMD serves with; it was never a dependency, so no image
+    # could start (found in docs/v4, Phase 5).
+    "gunicorn>=23",
 ]
 
 [project.optional-dependencies]

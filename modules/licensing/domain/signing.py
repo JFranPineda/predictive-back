@@ -64,3 +64,20 @@ def decrypt_signing_key(pem: bytes, password: str) -> Ed25519PrivateKey:
     if not isinstance(key, Ed25519PrivateKey):
         raise SigningKeyError("el archivo no es una clave Ed25519")
     return key
+
+
+def sign_blob(signing_key: Ed25519PrivateKey, data: bytes) -> bytes:
+    """Sign raw bytes (the integrity manifest). The token signer in
+    `license.py` does the same for a licence body; this is for everything
+    else we sign with the same key."""
+    return signing_key.sign(data)
+
+
+def verify_blob(public_key: str, data: bytes, signature: bytes) -> None:
+    """Raises SigningKeyError unless `signature` is ours over `data`."""
+    from cryptography.exceptions import InvalidSignature
+
+    try:
+        load_public_key(public_key).verify(signature, data)
+    except InvalidSignature as exc:
+        raise SigningKeyError("la firma no corresponde a estos datos") from exc

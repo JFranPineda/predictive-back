@@ -21,6 +21,7 @@ def respond(kind: str, context: dict, fmt: str) -> HttpResponse:
         response = HttpResponse(WORKBOOKS[kind](context), content_type=XLSX)
         response["Content-Disposition"] = f'attachment; filename="{name}.xlsx"'
         return response
+    context = {**context, **_build_stamp()}
     html = render_to_string(f"reports/{kind}.html", context)
     if fmt == "pdf":
         from weasyprint import HTML
@@ -29,6 +30,17 @@ def respond(kind: str, context: dict, fmt: str) -> HttpResponse:
         response["Content-Disposition"] = f'attachment; filename="{name}.pdf"'
         return response
     return HttpResponse(html, content_type="text/html; charset=utf-8")
+
+
+def _build_stamp() -> dict:
+    """Customer and version for the PDF metadata (v4 Phase 5): support reads
+    them to know what runs where."""
+    from django.conf import settings
+
+    from modules.licensing.domain.build import BuildStamp
+
+    stamp = BuildStamp(settings.BUILD_TENANT, settings.BUILD_VERSION, settings.BUILD_ID)
+    return {"build_author": stamp.pdf_author, "build_creator": stamp.pdf_creator}
 
 
 def _slug(text: str) -> str:
