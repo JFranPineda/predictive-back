@@ -51,6 +51,20 @@ class TestRequest:
             "installation": HERE.code(), "version": "0.1.0", "equipment": 98, "users": 4,
         }
 
+    def test_a_new_installation_asks_for_its_first_licence(self):
+        # v4 Phase 6 (P6-c): the licence is issued for the installation, which
+        # only exists once installed, so the first request has none to name.
+        first = RenewalRequest(
+            tenant="ipsa", license_id="", valid_until=None,
+            installation=HERE.code(), version="0.1.0", equipment=0, users=1,
+        )
+        lines = first.text().splitlines()
+        assert lines[2:4] == ["licencia: ninguna (primera licencia)", "vence: —"]
+        assert [line.split(":")[0] for line in lines[1:]] == [
+            "cliente", "licencia", "vence", "instalación", "versión", "equipos", "usuarios",
+        ]
+        assert first.payload()["license"] == "" and first.payload()["until"] is None
+
 
 class TestRenewalFile:
     def test_the_next_period_for_this_installation_is_accepted(self):

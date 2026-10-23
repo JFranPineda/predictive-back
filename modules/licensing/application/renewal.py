@@ -49,13 +49,11 @@ def build_request(tenant_code: str, *, keys: TrustedKeys) -> RenewalRequest:
     from modules.licensing.infrastructure.renewal_facts import counts, program_version
 
     current = current_licence(tenant_code, keys=keys)
-    if current is None:
-        raise RenewalRejectedError(f"«{tenant_code}» no tiene una licencia válida que renovar.")
     equipment, users = counts(tenant_code)
     return RenewalRequest(
         tenant=tenant_code,
-        license_id=current.license_id,
-        valid_until=current.valid_until,
+        license_id=current.license_id if current else "",
+        valid_until=current.valid_until if current else None,
         installation=observed_installation(tenant_code).code(),
         version=program_version(),
         equipment=equipment,

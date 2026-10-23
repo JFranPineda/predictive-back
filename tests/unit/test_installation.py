@@ -99,7 +99,9 @@ class TestVerdict:
         verdict = evaluate(_licence(), today=TODAY, installation=_elsewhere(pg_system_id="x", machine_id="y"))
         assert verdict.status is LicenseStatus.OTHER_INSTALLATION
         assert verdict.read_only and not verdict.lapsed
-        assert "license fingerprint" in verdict.reason
+        # What the customer sends, and to whom: the licensor, from the
+        # licence screen or `license.sh request` on their server.
+        assert "Industrie Ampel" in verdict.reason and "solicitud de licencia" in verdict.reason
 
     def test_an_expired_licence_elsewhere_is_still_expired(self):
         elsewhere = _elsewhere(pg_system_id="x", machine_id="y")

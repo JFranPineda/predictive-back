@@ -27,8 +27,10 @@ class RenewalRejectedError(Exception):
 @dataclass(frozen=True, slots=True)
 class RenewalRequest:
     tenant: str
+    # Empty on a new installation: its first licence is the one it asks for
+    # (v4 Phase 6, P6-c).
     license_id: str
-    valid_until: date
+    valid_until: date | None
     installation: str
     version: str
     equipment: int
@@ -38,8 +40,8 @@ class RenewalRequest:
         return "\n".join((
             "PREDICTIVE · solicitud de licencia",
             f"cliente: {self.tenant}",
-            f"licencia: {self.license_id}",
-            f"vence: {self.valid_until.isoformat()}",
+            f"licencia: {self.license_id or 'ninguna (primera licencia)'}",
+            f"vence: {self.valid_until.isoformat() if self.valid_until else '—'}",
             f"instalación: {self.installation}",
             f"versión: {self.version}",
             f"equipos: {self.equipment}",
@@ -51,7 +53,7 @@ class RenewalRequest:
         return {
             "tenant": self.tenant,
             "license": self.license_id,
-            "until": self.valid_until.isoformat(),
+            "until": self.valid_until.isoformat() if self.valid_until else None,
             "installation": self.installation,
             "version": self.version,
             "equipment": self.equipment,
@@ -72,8 +74,8 @@ def check_renewal(
         )
     if not belongs_to(new.installation, observed):
         raise RenewalRejectedError(
-            "Esta licencia es de otra instalación. Envía a 1A-MIG lo que muestra "
-            "`manage.py license fingerprint` en este servidor y te enviaremos la que le corresponde."
+            "Esta licencia es de otra instalación. Envía a Industrie Ampel la solicitud de licencia "
+            "de este servidor y te enviaremos la que le corresponde."
         )
     if current is not None and new.valid_until < current.valid_until:
         raise RenewalRejectedError(

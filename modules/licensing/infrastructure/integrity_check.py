@@ -34,6 +34,6 @@ def enforce_integrity() -> None:
         # process so a tampered build never serves.
         sys.stderr.write(
             f"\nPREDICTIVE no puede arrancar: la verificación de integridad falló.\n  {exc}\n"
-            "Reinstala la imagen firmada que te entregamos; si persiste, contacta con 1A-MIG.\n\n"
+            "Reinstala la imagen firmada que te entregamos; si persiste, contacta con Industrie Ampel.\n\n"
         )
         raise SystemExit(70) from exc

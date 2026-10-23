@@ -91,8 +91,8 @@ def lapsed_reason(cause: str) -> str:
 
 OTHER_INSTALLATION_REASON = (
     "Esta licencia es de otra instalación: el sistema queda en solo lectura. Para reactivarla, "
-    "envía a 1A-MIG lo que muestra `manage.py license fingerprint` en este servidor y te "
-    "enviaremos una licencia para él."
+    "envía a Industrie Ampel la solicitud de licencia de este servidor (Configuración → Licencia, "
+    "o `license.sh request` en el servidor) y te enviaremos una licencia para él."
 )
 
 

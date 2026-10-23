@@ -136,7 +136,9 @@ class Command(BaseCommand):
         self.stdout.write(f"PostgreSQL   {pg}")
         self.stdout.write(f"máquina      {machine}")
         self.stdout.write(f"código       {fingerprint.code()}")
-        self.stdout.write("Envía el código a 1A-MIG para emitir o reactivar la licencia de esta instalación.")
+        self.stdout.write(
+            "Envía el código a Industrie Ampel para emitir o reactivar la licencia de esta instalación."
+        )
 
     def _clock(self, options):
         from modules.licensing.application.license_service import latest_record

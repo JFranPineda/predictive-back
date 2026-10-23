@@ -34,7 +34,7 @@ class Usage:
         return self.allowed is None or self.used + adding <= self.allowed
 
 
-def limit_message(usage: Usage, adding: int = 1, provider: str = "1A-MIG") -> str:
+def limit_message(usage: Usage, adding: int = 1, provider: str = "Industrie Ampel") -> str:
     singular, plural = _NAMES.get(usage.resource, (usage.resource, usage.resource))
     if adding > 1:
         room = max((usage.allowed or 0) - usage.used, 0)

@@ -25,6 +25,6 @@ def test_the_warning_starts_at_ninety_percent():
 
 def test_the_message_names_the_resource_in_spanish():
     assert limit_message(Usage("equipment", 600, 600)) == (
-        "Tu plan permite 600 equipos y ya tienes 600. Contacta con 1A-MIG para ampliarlo."
+        "Tu plan permite 600 equipos y ya tienes 600. Contacta con Industrie Ampel para ampliarlo."
     )
     assert "solo admite 20 más" in limit_message(Usage("equipment", 580, 600), adding=50)
