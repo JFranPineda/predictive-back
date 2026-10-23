@@ -1,0 +1,84 @@
+# PREDICTIVE installed on the customer's server (v4 Phase 6).
+#
+# install.sh copies this beside the .env it writes; nothing here is edited by
+# hand. Only `web` publishes ports: the application, the database and Redis
+# sit on a network with no way out, and the application port is reachable
+# only through the proxy (config/settings/prod.py trusts its
+# X-Forwarded-Proto). Online renewal, if their IT allows it, adds a way out
+# for the two services that need one (compose.online.yml).
+name: predictive
+
+x-app: &app
+  image: ${APP_IMAGE:?}
+  env_file: [.env]
+  restart: unless-stopped
+  networks: [backend]
+  volumes:
+    - data:/app/data
+    # The licence covers this server: its machine id is one of the three
+    # identifiers of the installation (Phase 2).
+    - /etc/machine-id:/etc/machine-id:ro
+  depends_on:
+    db: {condition: service_healthy}
+    redis: {condition: service_started}
+
+services:
+  db:
+    image: ${DB_IMAGE:?}
+    restart: unless-stopped
+    networks: [backend]
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      PREDICTIVE_DB_PASSWORD: ${PREDICTIVE_DB_PASSWORD:?}
+      TENANT: ${TENANT:?}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d predictive_control"]
+      interval: 2s
+      retries: 60
+
+  redis:
+    image: ${REDIS_IMAGE:?}
+    restart: unless-stopped
+    networks: [backend]
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+
+  api:
+    <<: *app
+
+  worker:
+    <<: *app
+    command: ["celery", "-A", "config", "worker", "-Q", "celery,media", "-l", "info", "--concurrency", "2"]
+
+  beat:
+    <<: *app
+    # The schedule lives in the control plane (django_celery_beat); the
+    # program's directory is not the service user's to write a pid into.
+    command: ["celery", "-A", "config", "beat", "-l", "info", "--pidfile="]
+
+  web:
+    image: ${WEB_IMAGE:?}
+    restart: unless-stopped
+    networks: [backend, edge]
+    ports: ["80:80", "443:443"]
+    environment:
+      PREDICTIVE_SITES: ${PREDICTIVE_SITES:?}
+      PREDICTIVE_DEFAULT_SNI: ${PREDICTIVE_DEFAULT_SNI:?}
+    volumes:
+      # Originals and thumbnails, served straight from the data volume.
+      - data:/srv/data:ro
+      - ./tls:/etc/predictive/tls:ro
+      - caddy:/data
+    depends_on: [api]
+
+networks:
+  backend:
+    internal: true
+  edge: {}
+
+volumes:
+  pgdata:
+  data:
+  caddy:

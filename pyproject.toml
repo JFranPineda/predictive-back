@@ -37,6 +37,8 @@ dev = [
     "pytest>=8.3", "pytest-django>=4.9", "pytest-cov>=5.0",
     "ruff>=0.7", "mypy>=1.13", "django-stubs>=5.1",
     "import-linter>=2.1", "factory-boy>=3.3", "freezegun>=1.5",
+    # The installation manual's PDF (v4 Phase 6, deploy/release/manual.py).
+    "markdown>=3.7",
 ]
 
 [tool.ruff]

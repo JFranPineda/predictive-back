@@ -12,7 +12,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY pyproject.toml .
-RUN pip install -e ".[dev]" && pip install nuitka
+# What the delivery runs on goes to its own prefix, apart from the tools that
+# build and test it: the runtime image copies that prefix only, so no pytest,
+# mypy, ruff or Nuitka ships (v4 Phase 6).
+RUN pip install --prefix=/runtime . && pip install ".[dev]" nuitka
 COPY . .
 ARG COMPILE_LIMIT=
 # Close the source: value to native, glue to bytecode, strip the .py.
@@ -38,16 +41,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 libffi8 libheif1 libde265-0 libpango-1.0-0 libpangoft2-1.0-0 libcairo2 exiftool \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+COPY --from=builder /runtime /usr/local
 COPY --from=builder /app /app
 ARG BUILD_TENANT=""
 ARG BUILD_VERSION=""
 ARG BUILD_ID=""
 ENV BUILD_TENANT=${BUILD_TENANT} BUILD_VERSION=${BUILD_VERSION} BUILD_ID=${BUILD_ID}
 # A system user with no login: it runs PREDICTIVE and writes its data, and
-# cannot touch the program, which stays root-owned.
-RUN useradd --system --create-home --home-dir /home/predictive --shell /usr/sbin/nologin predictive \
+# cannot touch the program, which stays root-owned. Its uid is fixed: the
+# installation's data volume belongs to it from one version to the next.
+RUN groupadd --system --gid 10001 predictive \
+    && useradd --system --uid 10001 --gid predictive --create-home --home-dir /home/predictive \
+       --shell /usr/sbin/nologin predictive \
     && mkdir -p /app/data && chown predictive:predictive /app/data
 USER predictive
 CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4"]
@@ -55,6 +60,7 @@ CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers
 # Never delivered: the delivery image plus its tests, so the suite runs on the
 # compiled program exactly as shipped (AC-5.2).
 FROM runtime AS verify
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /verify/tests /app/tests
 COPY --from=builder /verify/settings/ /app/config/settings/
 ENV DJANGO_SETTINGS_MODULE=config.settings.test

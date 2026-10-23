@@ -4,6 +4,7 @@ norms publish, which are data we load on purpose and never part of that base."""
 
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -91,3 +92,34 @@ class TestNormLimits:
     def test_the_rationale_names_the_norm_and_the_class(self, machine_class):
         limit = next(limit for limit in NORM_LIMITS if limit.machine_class == machine_class)
         assert "ISO 10816" in limit.rationale and "·" in limit.rationale
+
+
+MANUAL = Path(__file__).resolve().parents[2] / "deploy/release/manual.py"
+
+
+# The sealed image ships no build tooling: there these run in the source only.
+@pytest.mark.skipif(not MANUAL.exists(), reason="build tooling is not part of the delivery")
+class TestManual:
+    def _manual(self):
+        import importlib.util
+
+        path = MANUAL
+        spec = importlib.util.spec_from_file_location("manual", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_the_key_fingerprint_is_what_openssl_prints_on_their_server(self):
+        # Their IT runs `openssl pkey -pubin -in predictive-entregas.pub -outform DER | sha256sum`
+        # and compares it with the manual's cover, four characters at a time.
+        import hashlib
+
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        public = ec.generate_private_key(ec.SECP256R1()).public_key()
+        pem = public.public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        der = public.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+        printed = self._manual().fingerprint(pem)
+        assert printed.replace(" ", "") == hashlib.sha256(der).hexdigest()
+        assert all(len(group) == 4 for group in printed.split())

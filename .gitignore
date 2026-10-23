@@ -24,3 +24,5 @@ data/backups/
 /staticfiles/
 # Licence signing keys live outside the repository; a stray one never gets in.
 *.pem
+# The installer tests on VMs keep their throwaway keys and deliveries here.
+.onprem-vm/

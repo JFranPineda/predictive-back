@@ -421,7 +421,7 @@ installation_checks() {
     --installation "${here%%:*}:$(printf 'a%.0s' {1..32}):$(printf 'b%.0s' {1..32})" >/dev/null
   body="$(api_status)"
   if [[ "$(field "$body" status)" == "other_installation" && "$(write_gate)" == "402" \
-    && "$(field "$body" reason)" == *"license fingerprint"* ]]; then
+    && "$(field "$body" reason)" == *"solicitud de licencia"* ]]; then
     pass "una licencia de otra instalación: solo lectura y cómo reactivarla"
   else
     fail "una licencia de otra instalación no se trata como tal: $body"

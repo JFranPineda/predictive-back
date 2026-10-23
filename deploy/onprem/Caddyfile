@@ -1,0 +1,41 @@
+# The installation's front door (v4 Phase 6): HTTPS, the built front, the
+# media files and the API behind it. PREDICTIVE_SITES lists the names and
+# addresses the plant reaches it by ("predictive.ipsa.local, 10.0.0.20").
+{
+	admin off
+	# A certificate of the installation's own authority is trusted on the
+	# plant's PCs (the manual explains how), never inside this container.
+	skip_install_trust
+	# A browser that comes in by IP sends no server name: answer with the
+	# certificate of the installation's address, not with none.
+	default_sni {$PREDICTIVE_DEFAULT_SNI}
+}
+
+{$PREDICTIVE_SITES} {
+	# Their IT's certificate, or the installation's own authority (P6-d).
+	import /etc/predictive/tls/tls.caddy
+	encode zstd gzip
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy same-origin
+		-Server
+	}
+
+	handle /api/* {
+		# One customer per installation: the tenant comes from DEFAULT_TENANT,
+		# never from a header a browser can set.
+		request_header -X-Tenant
+		reverse_proxy api:8000
+	}
+
+	handle_path /media/* {
+		root * /srv/data/media
+		file_server
+	}
+
+	handle {
+		root * /srv/front
+		try_files {path} /index.html
+		file_server
+	}
+}

@@ -1,0 +1,12 @@
+# Online renewal (v4 Phase 3), only if the customer's IT lets this server
+# reach our renewal service: the API and the worker get a way out, nothing
+# else does. install.sh adds this file to COMPOSE_FILE when LICENSE_RENEW_URL
+# is set.
+services:
+  api:
+    networks: [backend, egress]
+  worker:
+    networks: [backend, egress]
+
+networks:
+  egress: {}
