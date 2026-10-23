@@ -2,15 +2,16 @@
 
 Run by the module installer on install and on every upgrade, so everything is
 get-or-create: a company that already edited its limits keeps them.
+
+It lays the norma and its scale's names, never its cuts: those are each
+company's own criterion, set in Normas (v4 Phase 6). The cuts inferred from
+IPSA's order 14778 are IPSA's, and no other customer starts with them.
 """
 
 from __future__ import annotations
 
-from datetime import date
-
 from modules.measurements.domain.magnitude_order import display_order_for
 from modules.ut_rollers.domain.rollers import (
-    DEFAULT_BANDS,
     LABELS,
     MAGNITUDE,
     NORMA_CODE,
@@ -56,7 +57,6 @@ def install() -> None:
     )
     for company in Company.objects.all():
         _profile(company, technique)
-        _limits(company)
         _norma(company, technique)
         _kind(company)
 
@@ -80,30 +80,6 @@ def _profile(company, technique) -> None:
                 profile=profile, status=statuses[code],
                 defaults={"order": order, "display_name": label},
             )
-
-
-def _limits(company) -> None:
-    from modules.thresholds.models import Status, ThresholdBand, ThresholdSet
-
-    if ThresholdSet.objects.for_company(company.id).filter(magnitude_code=MAGNITUDE).exists():
-        return
-    statuses = {row.code: row for row in Status.objects.for_company(company.id).filter(kind="condition")}
-    if not all(band.status_code in statuses for band in DEFAULT_BANDS):
-        return
-    threshold_set = ThresholdSet.objects.create(
-        company=company, scope="global", magnitude_code=MAGNITUDE, unit_code="mm",
-        aggregation="min", valid_from=date(2020, 1, 1),
-        rationale=(
-            "Inferido de la orden 14778 (IPSA, secadores): MEDIO con el espesor mínimo ≤ 8,00 mm. "
-            "CRÍTICO bajo 6,14 mm (75 % de la pared de 8,18 mm del tubo de 8\" SCH 40) es un supuesto "
-            "pendiente de confirmar con el cliente (Q15)."
-        ),
-    )
-    for order, band in enumerate(DEFAULT_BANDS):
-        ThresholdBand.objects.create(
-            threshold_set=threshold_set, status=statuses[band.status_code],
-            min_value=band.min_value, max_value=band.max_value, order=order,
-        )
 
 
 def _norma(company, technique) -> None:

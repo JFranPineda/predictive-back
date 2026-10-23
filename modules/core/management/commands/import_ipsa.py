@@ -22,7 +22,6 @@ into the data.
 
 from __future__ import annotations
 
-import importlib
 from collections import Counter
 from datetime import datetime, time, timedelta
 from decimal import Decimal
@@ -34,7 +33,6 @@ from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
 from modules.assets.domain.asset_code import generate as generate_code
-from modules.assets.domain.builtin_kinds import BUILTIN_KINDS
 from modules.assets.domain.ipsa import (
     Book,
     area_of,
@@ -49,36 +47,24 @@ from modules.assets.infrastructure.importers.ipsa_excel import read_book, read_s
 from modules.assets.models import (
     Area,
     AssetGroup,
-    AssetGroupComponent,
-    AssetGroupKind,
     Equipment,
     MeasurementPoint,
     Plant,
-    PointTemplate,
     Sector,
 )
+from modules.core.domain.base_catalogue import OPERATING_PARAMETERS
 from modules.core.infrastructure.transactions import tenant_atomic
-from modules.core.management.commands.seed_demo import (
-    MAGNITUDES,
-    OPERATING_PARAMETERS,
-    ROLES,
-    TECHNIQUES,
-    UNITS,
-)
 from modules.core.models import (
     Company,
 )
 from modules.diagnostics.models import (
     EquipmentLogEntry,
-    FaultMode,
 )
 from modules.licensing.infrastructure.context import current_alias
 from modules.measurements.models import (
     Instrument,
-    Magnitude,
     Reading,
     Technique,
-    Unit,
 )
 from modules.operating_data.models import (
     OperatingParameter,
@@ -86,8 +72,6 @@ from modules.operating_data.models import (
 )
 from modules.security.models import (
     Membership,
-    Permission,
-    Role,
     User,
 )
 from modules.services.models import (
@@ -97,7 +81,6 @@ from modules.services.models import (
     VisitParticipant,
 )
 from modules.thresholds.models import (
-    MachineClass,
     Status,
     TechniqueStatusOption,
     TechniqueStatusProfile,
@@ -131,15 +114,6 @@ MODULES = (
     "summaries",
     "reports",
 )
-
-HEADLINES = {
-    "vibration": "vel_rms",
-    "thermography": "delta_temp",
-    "ultrasound": "us_db",
-    "oil_analysis": "viscosity_40",
-    "insulating_oil": "dielectric_kv",
-    "ndt_thickness": "thickness_mm",
-}
 
 # The limits most of the 47 books print. A book whose own table differs gets
 # its own set on its machines, so the system grades as that book did.
@@ -304,181 +278,10 @@ class Command(BaseCommand):
                 self.made["módulos"] += len(done)
 
     def _catalogue(self, company) -> dict:
-        from modules.diagnostics.domain.catalogue import ALL_FAULTS
-        from modules.measurements.domain.acceleration import ACCELERATION
-        from modules.measurements.domain.families import family_for
-        from modules.measurements.domain.magnitude_order import display_order_for, in_record_by_default
-        from modules.measurements.domain.thermography import IR_TMAX_SPEC
-        from modules.thresholds.domain.defaults import ALL_STATUSES, PROFILES, STANDARDS, TRANSLATIONS
+        from modules.core.infrastructure.base_catalogue import lay_base_catalogue
 
-        per_bearing = importlib.import_module(
-            "modules.measurements.migrations.0005_magnitude_per_axis"
-        ).PER_BEARING
-
-        statuses = {
-            status.code: self._get(
-                Status,
-                "estados",
-                company=company,
-                code=status.code,
-                defaults={
-                    "name": status.name,
-                    "kind": status.kind.value,
-                    "severity": status.severity,
-                    "color": status.color,
-                    "requires_action": status.requires_action,
-                    "is_terminal": status.is_terminal,
-                    "measurable": status.measurable,
-                    "translations": {"name": TRANSLATIONS.get(status.code, {})},
-                },
-            )
-            for status in ALL_STATUSES
-        }
-        units = {
-            code: self._get(
-                Unit, "unidades", code=code, defaults={"name": name, "translations": {"name": tr}}
-            )
-            for code, name, tr in [*UNITS, ("mm", "Milímetros", {"es": "Milímetros", "en": "Millimetres"})]
-        }
-        techniques = {}
-        for code, name_es, name_en, module in [
-            *TECHNIQUES,
-            ("ndt_thickness", "END · Espesores UT", "NDT · UT thickness", "ultrasound"),
-        ]:
-            techniques[code] = self._get(
-                Technique,
-                "técnicas",
-                code=code,
-                defaults={
-                    "name": name_es,
-                    "module_code": module,
-                    "family": family_for(code),
-                    "headline_magnitude": HEADLINES.get(code, ""),
-                    "close_requirement": "plan_required" if code == "topography" else "",
-                    "evidence_only": code in ("ndt_penetrant", "ndt_magnetic"),
-                    "translations": {"name": {"es": name_es, "en": name_en}},
-                },
-            )
-        rows = [
-            (code, technique, es, en, unit, aggregation, decimals, {})
-            for code, technique, es, en, unit, aggregation, decimals in MAGNITUDES
-        ]
-        for spec in (ACCELERATION, IR_TMAX_SPEC):
-            rows.append(
-                (
-                    spec.code,
-                    spec.technique,
-                    spec.name_es,
-                    spec.name_en,
-                    spec.unit,
-                    spec.aggregation,
-                    spec.decimals,
-                    {
-                        "per_axis": spec.per_axis,
-                        "higher_is_worse": spec.higher_is_worse,
-                        "short_code": getattr(spec, "short_code", ""),
-                        "template_only": getattr(spec, "template_only", False),
-                    },
-                )
-            )
-        rows.append(
-            (
-                "thickness_mm",
-                "ndt_thickness",
-                "Espesor de pared",
-                "Wall thickness",
-                "mm",
-                "min",
-                2,
-                {"higher_is_worse": False, "per_axis": False},
-            )
-        )
-        magnitudes = {}
-        for code, technique, es, en, unit, aggregation, decimals, extra in rows:
-            defaults = {
-                "technique": techniques[technique],
-                "name": es,
-                "default_unit": units[unit],
-                "default_aggregation": aggregation,
-                "decimals": decimals,
-                "display_order": display_order_for(code),
-                "in_record": in_record_by_default(code),
-                "translations": {"name": {"es": es, "en": en}},
-                "per_axis": code not in per_bearing,
-                "short_code": per_bearing.get(code, ""),
-            }
-            defaults.update({k: v for k, v in extra.items() if v not in ("", None)})
-            magnitudes[code] = self._get(Magnitude, "magnitudes", code=code, defaults=defaults)
-
-        standards = {}
-        for standard in STANDARDS:
-            row = self._get(
-                ThresholdStandard,
-                "normas",
-                company=company,
-                code=standard.code,
-                defaults={"name": standard.name, "source": standard.source, "is_builtin": True},
-            )
-            row.techniques.add(*[techniques[c] for c in standard.techniques if c in techniques])
-            for order, machine_class in enumerate(standard.machine_classes):
-                self._get(
-                    MachineClass,
-                    "clases",
-                    standard=row,
-                    code=machine_class.code,
-                    defaults={
-                        "name": machine_class.name,
-                        "description": machine_class.description,
-                        "order": order,
-                        "power_min_kw": machine_class.power_min_kw,
-                        "power_max_kw": machine_class.power_max_kw,
-                        "mounting": machine_class.mounting.value,
-                    },
-                )
-            standards[standard.code] = row
-        for profile in PROFILES:
-            technique = techniques.get(profile.technique_code)
-            if technique is None:
-                continue
-            row = self._get(TechniqueStatusProfile, "perfiles", company=company, technique=technique)
-            for order, status in enumerate(profile.options):
-                self._get(
-                    TechniqueStatusOption,
-                    "perfiles",
-                    profile=row,
-                    status=statuses[status.code],
-                    defaults={"order": order},
-                )
-        for fault in ALL_FAULTS:
-            self._get(
-                FaultMode,
-                "modos de falla",
-                company=company,
-                code=fault.code,
-                defaults={
-                    "name": fault.name_es,
-                    "technique_code": fault.technique,
-                    "typical_signature": fault.signature,
-                    "iso_reference": fault.reference,
-                    "translations": {"name": {"es": fault.name_es, "en": fault.name_en}},
-                },
-            )
-        for order, (code, es, en, unit, technique, applies, cumulative) in enumerate(OPERATING_PARAMETERS):
-            self._get(
-                OperatingParameter,
-                "parámetros",
-                company=company,
-                code=code,
-                defaults={
-                    "name": es,
-                    "unit_code": unit,
-                    "technique_code": technique,
-                    "applies_to": applies,
-                    "is_cumulative": cumulative,
-                    "order": order,
-                    "translations": {"name": {"es": es, "en": en}},
-                },
-            )
+        catalogue = lay_base_catalogue(company, using=self.alias)
+        self.made.update(catalogue.made)
         # Pulper Nº 04's takes name the load it ran under (VACÍO, CARGA 1TN).
         self._get(
             OperatingParameter,
@@ -515,57 +318,22 @@ class Command(BaseCommand):
             )
             for technique, (code, name, maker) in INSTRUMENTS.items()
         }
-        kinds = self._kinds(company)
         provider = self._get(ServiceProvider, "proveedores", company=company, name="1A-MIG")
         return {
-            "statuses": statuses,
-            "techniques": techniques,
-            "magnitudes": magnitudes,
-            "standards": standards,
+            "statuses": catalogue.statuses,
+            "techniques": catalogue.techniques,
+            "magnitudes": catalogue.magnitudes,
+            "standards": catalogue.standards,
             "instruments": instruments,
-            "kinds": kinds,
+            "kinds": catalogue.kinds,
             "provider": provider,
         }
 
-    def _kinds(self, company) -> dict:
-        from modules.assets.infrastructure.kind_layouts import write_layout
-
-        kinds = {}
-        for blueprint in BUILTIN_KINDS:
-            kind, created = AssetGroupKind.objects.get_or_create(
-                company=company,
-                code=blueprint.code,
-                defaults={
-                    "name": blueprint.name,
-                    "is_builtin": True,
-                    "translations": {"name": {"es": blueprint.name, "en": blueprint.name_en}},
-                },
-            )
-            if created:
-                self.made["tipos de conjunto"] += 1
-                write_layout(
-                    kind,
-                    blueprint.components,
-                    component_model=AssetGroupComponent,
-                    template_model=PointTemplate,
-                    using=self.alias,
-                )
-            kinds[blueprint.code] = kind
-        return kinds
-
     def _people(self, company) -> dict:
-        active = {p.code: p for p in Permission.objects.filter(is_active=True)}
-        roles = {}
-        for code, granted in ROLES.items():
-            role, created = Role.objects.get_or_create(
-                company=company, code=code, defaults={"name": code.replace("_", " ").title()}
-            )
-            if created:
-                self.made["roles"] += 1
-                role.permissions.set(
-                    active.values() if granted == ["*"] else [active[p] for p in granted if p in active]
-                )
-            roles[code] = role
+        from modules.core.infrastructure.base_catalogue import lay_roles
+
+        roles, made = lay_roles(company)
+        self.made.update(made)
         people = {}
         for email, first, last, initials, role_code in PEOPLE:
             user = User.objects.filter(email=email).first()

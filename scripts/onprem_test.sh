@@ -13,6 +13,8 @@
 #   scripts/onprem_test.sh stop        stop the API
 #   scripts/onprem_test.sh down        stop the API and the database, keep data
 #   scripts/onprem_test.sh reset       down, then delete the database and files
+#   scripts/onprem_test.sh fresh       a customer with no books: catalogue, modules, limits
+#   scripts/onprem_test.sh demo        AMBEV's demo (seed_demo) in a tenant of its own
 #   scripts/onprem_test.sh manage ...  any manage.py command with the bench env
 #
 # The renewal checks also start the renewal service from ../predictive-renewal
@@ -825,6 +827,91 @@ with override_settings(LICENSE_RENEW_URL='$url'):
   stop_renewal
 }
 
+# A database of its own, created as the cluster's superuser: the application
+# role owns its databases but cannot create them, as on the customer's server.
+fresh_database() {
+  "${COMPOSE[@]}" exec -T -e PGPASSWORD=onprem-test -e PGOPTIONS='-c client_min_messages=warning' db \
+    psql -h 127.0.0.1 -U postgres -d postgres -qc "drop database if exists $1 with (force)" -c "create database $1 owner predictive_app" >/dev/null
+}
+
+# Phase 6 (P0-b): a customer that starts with no books and no demo. The base
+# catalogue, then every automatic module, and the norms' limits only when we
+# load them (P6-e).
+fresh() {
+  local code=fresh_test db=predictive_fresh_test out status expected installed sets
+  pass() { echo "  ✓ $1"; }
+  fail() { echo "  ✗ $1"; failed=1; }
+  local failed=0
+  echo "Base vacía"
+  fresh_database "$db"
+  manage tenants add "$code" "Cliente nuevo — banco" --url "$APP_URL/$db" --deployment on_premise >/dev/null
+  manage tenants migrate "$code" >/dev/null
+
+  out="$(manage tenants run "$code" catalog base --company nuevo --name "Cliente Nuevo S.A." 2>&1)" \
+    && status=0 || status=$?
+  [[ $status -eq 0 ]] && pass "el catálogo base se instala en una base vacía" \
+    || fail "catalog base falló (salida $status): ${out: -300}"
+  out="$(manage tenants run "$code" modules bootstrap 2>&1)" && status=0 || status=$?
+  expected="$(manage shell --verbosity 0 -c "
+from modules.core.infrastructure.discovery import discover_manifests
+print(' '.join(sorted(m.code for m in discover_manifests() if m.is_core or m.auto_install)))")"
+  installed="$(manage tenants run "$code" modules list 2>/dev/null | awk '$1 == "✓" {print $2}' | sort | paste -sd' ')"
+  if [[ $status -eq 0 && -n "$expected" && "$installed" == "$expected" ]]; then
+    pass "modules bootstrap instala todos los módulos automáticos ($(wc -w <<<"$expected"))"
+  else
+    fail "modules bootstrap no instaló todos (salida $status): faltan $(comm -23 <(tr ' ' '\n' <<<"$expected") \
+      <(tr ' ' '\n' <<<"$installed") | paste -sd' ') ${out: -200}"
+  fi
+
+  sets="$(psql_app "select count(*) from thresholds_thresholdset" "$db")"
+  [[ "$sets" == "0" ]] && pass "arranca sin límites: ningún criterio impuesto (P6-e)" \
+    || fail "la base nueva ya trae $sets conjuntos de límites"
+  expected="$(manage shell --verbosity 0 -c "
+from modules.thresholds.domain.norm_limits import NORM_LIMITS; print(len(NORM_LIMITS))")"
+  out="$(manage tenants run "$code" catalog limits 2>&1)" && status=0 || status=$?
+  sets="$(psql_app "select count(*) from thresholds_thresholdset" "$db")"
+  [[ $status -eq 0 && "$sets" == "$expected" ]] \
+    && pass "catalog limits carga los límites de norma como datos ($sets conjuntos)" \
+    || fail "catalog limits dejó $sets conjuntos de $expected (salida $status): ${out: -200}"
+  manage tenants run "$code" catalog limits >/dev/null 2>&1
+  manage tenants run "$code" catalog base --company nuevo --name "Cliente Nuevo S.A." >/dev/null 2>&1
+  [[ "$(psql_app "select count(*) from thresholds_thresholdset" "$db")" == "$expected" \
+    && "$(psql_app "select count(*) from measurements_unit" "$db")" \
+      == "$(manage shell --verbosity 0 -c "from modules.core.domain.base_catalogue import UNITS; print(len(UNITS))")" ]] \
+    && pass "volver a correrlos no duplica nada" || fail "volver a correr catalog duplicó filas"
+
+  (umask 077 && echo "una-clave-del-banco-2026" >"$STATE/admin-password")
+  out="$(manage tenants run "$code" catalog admin --email ti@nuevo.pe --first-name TI --last-name Nuevo \
+    --password-file "$STATE/admin-password" 2>&1)" && status=0 || status=$?
+  rm -f "$STATE/admin-password"
+  value="$(psql_app "select (select count(*) from security_role_permissions rp join security_role r on r.id = rp.role_id
+    join security_membership m on m.role_id = r.id join security_user u on u.id = m.user_id
+    where u.email = 'ti@nuevo.pe' and r.code = 'company_admin') = (select count(*) from security_permission where is_active)" "$db")"
+  [[ $status -eq 0 && "$value" == "t" ]] \
+    && pass "catalog admin crea el primer administrador con todos los permisos" \
+    || fail "catalog admin no dejó un administrador completo (salida $status): ${out: -200}"
+  return "$failed"
+}
+
+# Phase 6: seed_demo still lays AMBEV's demo after sharing the catalogue,
+# in a tenant of its own.
+demo() {
+  local code=ambev_test db=predictive_ambev_test docs="${1:-../predictive-docs}" out
+  fresh_database "$db"
+  manage tenants add "$code" "AMBEV — demo del banco" --url "$APP_URL/$db" --deployment on_premise >/dev/null
+  manage tenants migrate "$code" >/dev/null
+  manage tenants issue "$code" "${SIGN[@]}" --plan gestionado --equipment 1000 --users 40 --plants 2 \
+    --months 1 --installation "$(manage license fingerprint --tenant "$code" --code)" >/dev/null
+  out="$(manage tenants run "$code" seed_demo --docs "$docs" 2>&1)" || true
+  # The counts of the run that proved the shared catalogue (2026-10-23).
+  if [[ "$out" == *"listo: 558 equipos, 3843 puntos, 69174 lecturas, 3348 visitas"* ]]; then
+    echo "  ✓ seed_demo siembra la demo de AMBEV: 558 equipos, 3 843 puntos, 69 174 lecturas"
+  else
+    echo "  ✗ seed_demo no sembró la demo esperada: ${out: -300}"
+    return 1
+  fi
+}
+
 down() {
   stop
   "${COMPOSE[@]}" stop
@@ -844,6 +931,8 @@ case "${1:-}" in
   stop) stop ;;
   down) down ;;
   reset) reset ;;
+  fresh) fresh ;;
+  demo) shift; demo "$@" ;;
   manage) shift; manage "$@" ;;
-  *) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

@@ -21,95 +21,32 @@ from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
 from modules.assets.domain.asset_code import generate as generate_code
-from modules.assets.domain.builtin_kinds import BUILTIN_KINDS
 from modules.assets.domain.point_layout import ComponentSpec, plan_layout
-from modules.assets.infrastructure.kind_layouts import write_layout
 from modules.assets.models import (
     Area,
     AssetGroup,
-    AssetGroupComponent,
-    AssetGroupKind,
     Equipment,
     MeasurementPoint,
     Plant,
-    PointTemplate,
     Sector,
 )
+from modules.core.infrastructure.base_catalogue import lay_base_catalogue, lay_roles
 from modules.core.infrastructure.transactions import tenant_atomic
-from modules.licensing.infrastructure.context import current_alias
 from modules.core.models import Company, InstalledModule
-from modules.diagnostics.domain.catalogue import ALL_FAULTS
 from modules.diagnostics.models import EquipmentLogEntry, FaultMode
-from modules.measurements.domain.acceleration import ACCELERATION
-from modules.measurements.domain.thermography import IR_TMAX_SPEC
-from modules.measurements.domain.families import family_for
-from modules.measurements.domain.magnitude_order import display_order_for, in_record_by_default
-from modules.measurements.models import Instrument, Magnitude, Reading, Technique, Unit
+from modules.licensing.infrastructure.context import current_alias
+from modules.measurements.models import Instrument, Reading
 from modules.nameplate.models import NameplateData
 from modules.operating_data.models import OperatingParameter, OperatingReading
-from modules.security.models import Membership, Permission, Role, User
+from modules.security.models import Membership, Permission, User
 from modules.services.models import ServiceOrder, ServicePlan, ServiceVisit, VisitParticipant
-from modules.thresholds.domain.defaults import (
-    ALL_STATUSES,
-    ISO_BANDS_BY_CLASS,
-    NETA_DELTA_AMBIENT,
-    NETA_DELTA_SIMILAR,
-    PROFILES,
-    STANDARDS,
-    TRANSLATIONS,
-)
+from modules.thresholds.infrastructure.norm_limits import load_norm_limits
 from modules.thresholds.models import (
     MachineClass,
     Status,
-    TechniqueStatusOption,
-    TechniqueStatusProfile,
     ThresholdBand,
     ThresholdSet,
-    ThresholdStandard,
 )
-
-UNITS = [
-    ("mm/s", "Milímetros por segundo", {"es": "Milímetros por segundo", "en": "Millimetres per second"}),
-    ("gE", "Envolvente de aceleración", {"es": "Envolvente de aceleración", "en": "Acceleration envelope"}),
-    ("g", "Aceleración", {"es": "Aceleración", "en": "Acceleration"}),
-    ("°C", "Grados Celsius", {"es": "Grados Celsius", "en": "Degrees Celsius"}),
-    ("dB", "Decibelios", {"es": "Decibelios", "en": "Decibels"}),
-    ("PSI", "Libras por pulgada cuadrada", {"es": "Libras por pulgada cuadrada", "en": "Pounds per square inch"}),
-    ("Hz", "Hercios", {"es": "Hercios", "en": "Hertz"}),
-    ("rpm", "Revoluciones por minuto", {"es": "Revoluciones por minuto", "en": "Revolutions per minute"}),
-    ("cSt", "Centistokes", {"es": "Centistokes", "en": "Centistokes"}),
-    ("ppm", "Partes por millón", {"es": "Partes por millón", "en": "Parts per million"}),
-    ("kV", "Kilovoltios", {"es": "Kilovoltios", "en": "Kilovolts"}),
-    ("mgKOH/g", "Número ácido", {"es": "Miligramos de KOH por gramo", "en": "Milligrams KOH per gram"}),
-]
-
-TECHNIQUES = [
-    ("vibration", "Análisis de vibraciones", "Vibration analysis", "vibration"),
-    ("ultrasound", "Análisis de ultrasonido", "Ultrasound analysis", "ultrasound"),
-    ("thermography", "Termografía", "Thermography", "thermography"),
-    ("oil_analysis", "Análisis de aceite", "Oil analysis", "oil_analysis"),
-    ("insulating_oil", "Aceite dieléctrico", "Insulating oil", "oil_analysis"),
-    ("maintenance", "Mantenimiento", "Maintenance", "operating_data"),
-    ("lubrication", "Lubricación", "Lubrication", "operating_data"),
-    ("alignment", "Alineamiento", "Alignment", "alignment"),
-    ("topography", "Topografía", "Topography", "topography"),
-    ("ndt_penetrant", "Tintes penetrantes", "Dye penetrant testing", "measurements"),
-    ("ndt_magnetic", "Partículas magnéticas", "Magnetic particle testing", "measurements"),
-]
-
-MAGNITUDES = [
-    ("vel_rms", "vibration", "Velocidad vibracional", "Vibration velocity", "mm/s", "rms", 2),
-    ("env_accel", "vibration", "Envolvente de aceleración", "Acceleration envelope", "gE", "peak", 2),
-    ("temp", "thermography", "Temperatura", "Temperature", "°C", "max", 0),
-    ("delta_temp", "thermography", "ΔT contra componente similar",
-     "ΔT against a similar component", "°C", "max", 1),
-    ("delta_temp_ambient", "thermography", "ΔT sobre ambiente", "ΔT over ambient",
-     "°C", "max", 1),
-    ("us_db", "ultrasound", "Nivel de ultrasonido", "Ultrasound level", "dB", "avg", 1),
-    ("viscosity_40", "oil_analysis", "Viscosidad a 40 °C", "Viscosity at 40 °C", "cSt", "avg", 1),
-    ("water_ppm", "oil_analysis", "Contenido de agua", "Water content", "ppm", "avg", 0),
-    ("dielectric_kv", "insulating_oil", "Rigidez dieléctrica", "Dielectric strength", "kV", "avg", 1),
-]
 
 # Limits transcribed from the reports, with their source.
 THRESHOLDS = [
@@ -128,38 +65,6 @@ THRESHOLDS = [
     ("water_ppm", "avg", "ppm", "global", None, "iso_14830_1", None, "200", "500",
      "Contenido de agua en lubricante"),
 ]
-
-ROLES = {
-    "company_admin": ["*"],
-    "engineer": [
-        "assets.view_equipment", "assets.manage_equipment", "assets.manage_point",
-        "measurements.view_reading", "measurements.add_reading", "measurements.edit_reading",
-        "thresholds.view_set", "thresholds.manage_set", "thresholds.manage_status",
-        "thresholds.manage_standard", "services.view", "services.view_authorship",
-        "services.close_visit", "services.manage_order", "diagnostics.view",
-        "diagnostics.add_entry", "diagnostics.close_recommendation", "reports.view",
-        "reports.create", "reports.issue", "summaries.view", "summaries.export",
-        "media.view", "media.upload", "blueprints.view", "nameplate.view",
-        "core.manage_modules", "security.view_user", "licensing.view_status",
-    ],
-    "technician": [
-        "assets.view_equipment", "measurements.view_reading", "measurements.add_reading",
-        "services.view", "services.view_authorship", "media.view", "media.upload",
-        "diagnostics.view", "diagnostics.add_entry", "summaries.view",
-        "blueprints.view", "nameplate.view", "thresholds.view_set",
-    ],
-    "external_inspector": [
-        "assets.view_equipment", "blueprints.view", "nameplate.view",
-        "measurements.view_reading", "measurements.add_reading",
-        "services.view", "services.view_authorship",
-        "media.view", "media.upload", "diagnostics.view", "diagnostics.add_entry",
-        "summaries.view",
-    ],
-    "client_viewer": [
-        "assets.view_equipment", "measurements.view_reading", "summaries.view",
-        "reports.view", "services.view",
-    ],
-}
 
 PEOPLE = [
     ("carlos.balta@simiai.pe", "Carlos", "Balta", "CT", "engineer", False),
@@ -191,19 +96,18 @@ class Command(BaseCommand):
 
         company = self._company()
         self._modules()
-        statuses = self._statuses(company)
-        units, techniques, magnitudes = self._catalogue()
-        standards = self._standards(company, techniques)
-        self._profiles(company, statuses, techniques)
+        # The catalogue every customer starts from (v4 Phase 6), then AMBEV's own.
+        catalogue = lay_base_catalogue(company, using=current_alias())
+        statuses, units, magnitudes = catalogue.statuses, catalogue.units, catalogue.magnitudes
+        standards = catalogue.standards
         self._thresholds(company, statuses, standards, units)
-        self._operating_parameters(company)
         users = self._users(company)
         instruments = self._instruments(company)
 
         plant = Plant.objects.create(
             company=company, code="huachipa", name="Planta Huachipa", address="Lima, Perú"
         )
-        kinds = self._group_kinds(company)
+        kinds = catalogue.kinds
         equipment = self._assets(company, plant, rgp, standards, statuses, kinds)
         self._readings(company, equipment, magnitudes, units, statuses, instruments, users,
                        plant, options["rounds"], docs)
@@ -244,102 +148,6 @@ class Command(BaseCommand):
                 installed_at=timezone.now() if installed else None,
             )
 
-    def _statuses(self, company: Company) -> dict[str, Status]:
-        created = {}
-        for status in ALL_STATUSES:
-            created[status.code] = Status.objects.create(
-                company=company, code=status.code, name=status.name, kind=status.kind.value,
-                severity=status.severity, color=status.color,
-                requires_action=status.requires_action, is_terminal=status.is_terminal,
-                measurable=status.measurable,
-                translations={"name": TRANSLATIONS.get(status.code, {})},
-            )
-        return created
-
-    def _standards(self, company: Company, techniques) -> dict[str, ThresholdStandard]:
-        created = {}
-        for standard in STANDARDS:
-            row = ThresholdStandard.objects.create(
-                company=company, code=standard.code, name=standard.name,
-                source=standard.source, is_builtin=True,
-            )
-            # A standard judges the service type it was written for.
-            row.techniques.set([
-                techniques[code] for code in standard.techniques if code in techniques
-            ])
-            for order, machine_class in enumerate(standard.machine_classes):
-                MachineClass.objects.create(
-                    standard=row, code=machine_class.code, name=machine_class.name,
-                    description=machine_class.description, order=order,
-                    power_min_kw=machine_class.power_min_kw,
-                    power_max_kw=machine_class.power_max_kw,
-                    mounting=machine_class.mounting.value,
-                )
-            created[standard.code] = row
-        return created
-
-    def _catalogue(self):
-        units = {
-            code: Unit.objects.create(code=code, name=name, translations={"name": tr})
-            for code, name, tr in UNITS
-        }
-        techniques = {
-            code: Technique.objects.create(
-                code=code, name=name_es, module_code=module, family=family_for(code),
-                translations={"name": {"es": name_es, "en": name_en}},
-            )
-            for code, name_es, name_en, module in TECHNIQUES
-        }
-        # No reading plan seeds a topography visit's plan for it (V3-18): the
-        # close-time check is what makes it mandatory.
-        techniques["topography"].close_requirement = "plan_required"
-        techniques["topography"].save(update_fields=["close_requirement"])
-        # No magnitude, no reading plan: a photo and a conclusion are what
-        # closes one of these visits (V3-20).
-        for code in ("ndt_penetrant", "ndt_magnetic"):
-            techniques[code].evidence_only = True
-            techniques[code].save(update_fields=["evidence_only"])
-        magnitudes = {
-            code: Magnitude.objects.create(
-                code=code, technique=techniques[technique], name=name_es,
-                default_unit=units[unit], default_aggregation=aggregation, decimals=decimals,
-                display_order=display_order_for(code), in_record=in_record_by_default(code),
-                translations={"name": {"es": name_es, "en": name_en}},
-            )
-            for code, technique, name_es, name_en, unit, aggregation, decimals in MAGNITUDES
-        }
-        spec = ACCELERATION
-        magnitudes[spec.code] = Magnitude.objects.create(
-            code=spec.code, technique=techniques[spec.technique], name=spec.name_es,
-            default_unit=units[spec.unit], default_aggregation=spec.aggregation,
-            decimals=spec.decimals, per_axis=spec.per_axis, higher_is_worse=spec.higher_is_worse,
-            template_only=spec.template_only, display_order=display_order_for(spec.code),
-            in_record=in_record_by_default(spec.code),
-            translations={"name": {"es": spec.name_es, "en": spec.name_en}},
-        )
-        ir = IR_TMAX_SPEC
-        magnitudes[ir.code] = Magnitude.objects.create(
-            code=ir.code, technique=techniques[ir.technique], name=ir.name_es,
-            default_unit=units[ir.unit], default_aggregation=ir.aggregation,
-            decimals=ir.decimals, per_axis=ir.per_axis, higher_is_worse=ir.higher_is_worse,
-            short_code=ir.short_code, display_order=display_order_for(ir.code),
-            translations={"name": {"es": ir.name_es, "en": ir.name_en}},
-        )
-        techniques[ir.technique].headline_magnitude = "delta_temp"
-        techniques[ir.technique].save(update_fields=["headline_magnitude"])
-        return units, techniques, magnitudes
-
-    def _profiles(self, company, statuses, techniques) -> None:
-        for profile in PROFILES:
-            technique = techniques.get(profile.technique_code)
-            if technique is None:
-                continue
-            row = TechniqueStatusProfile.objects.create(company=company, technique=technique)
-            for order, status in enumerate(profile.options):
-                TechniqueStatusOption.objects.create(
-                    profile=row, status=statuses[status.code], order=order
-                )
-
     def _thresholds(self, company, statuses, standards, units) -> None:
         for (magnitude, aggregation, unit, scope, ref, standard, machine_class,
              low, high, rationale) in THRESHOLDS:
@@ -347,47 +155,8 @@ class Command(BaseCommand):
                 company, statuses, standards, magnitude, aggregation, unit, scope, ref,
                 standard, machine_class, low, high, rationale,
             )
-        self._iso_class_bands(company, statuses, standards)
-        self._neta_bands(company, statuses, standards)
-
-    def _iso_class_bands(self, company, statuses, standards) -> None:
-        """One band set per machine class, as the ISO tables publish them.
-
-        This is what makes the limits follow the motor's power: the class is
-        worked out from the nameplate and the set that matches it wins.
-        """
-        for standard_code in ("iso_10816_1", "iso_10816_3"):
-            standard = standards.get(standard_code)
-            if standard is None:
-                continue
-            for machine_class in standard.machine_classes.all():
-                bounds = ISO_BANDS_BY_CLASS.get(machine_class.code)
-                if bounds is None:
-                    continue
-                self._threshold_set(
-                    company, statuses, standards, "vel_rms", "rms", "mm/s",
-                    "global", None, standard_code, machine_class.code,
-                    bounds[0], bounds[1],
-                    f"{standard.name} · {machine_class.name}",
-                )
-
-    def _neta_bands(self, company, statuses, standards) -> None:
-        """Thermography on electrical panels is a comparison, not a reading.
-
-        NETA MTS grades the difference against a similar component under the
-        same load, and against ambient. A panel at 45 °C means nothing until
-        you know which of the two you are looking at.
-        """
-        for magnitude, bounds, rationale in (
-            ("delta_temp", NETA_DELTA_SIMILAR,
-             "ΔT contra un componente similar con igual carga (NETA MTS)"),
-            ("delta_temp_ambient", NETA_DELTA_AMBIENT,
-             "ΔT sobre la temperatura ambiente (NETA MTS)"),
-        ):
-            self._threshold_set(
-                company, statuses, standards, magnitude, "max", "°C",
-                "global", None, "neta_mts", None, bounds[0], bounds[1], rationale,
-            )
+        # The zones ISO 10816 and NETA publish: the demo grades by them.
+        load_norm_limits(company)
 
     def _threshold_set(self, company, statuses, standards, magnitude, aggregation, unit,
                        scope, ref, standard_code, machine_class_code, low, high, rationale,
@@ -414,23 +183,17 @@ class Command(BaseCommand):
         return threshold
 
     def _users(self, company) -> dict[str, User]:
-        permissions = {}
         from modules.core.infrastructure.discovery import discover_manifests
 
+        # The modules were marked installed without the installer, so their
+        # permissions are laid here.
         for manifest in discover_manifests():
             for code, description in manifest.permissions:
-                permissions[code] = Permission.objects.create(
-                    code=code, module_code=manifest.code, description=description
+                Permission.objects.get_or_create(
+                    code=code, defaults={"module_code": manifest.code, "description": description}
                 )
 
-        roles = {}
-        for code, granted in ROLES.items():
-            role = Role.objects.create(company=company, code=code, name=code.replace("_", " ").title())
-            role.permissions.set(
-                permissions.values() if granted == ["*"]
-                else [permissions[p] for p in granted if p in permissions]
-            )
-            roles[code] = role
+        roles, _ = lay_roles(company)
 
         users = {}
         for email, first, last, initials, role_code, is_external in PEOPLE:
@@ -444,18 +207,6 @@ class Command(BaseCommand):
             users[initials] = user
         users["ADMIN"] = users["AD"]
         return users
-
-    def _operating_parameters(self, company) -> None:
-        """The columns that sit beside the vibration values in the real
-        reports: frequency, suction and discharge pressure, running hours."""
-        for order, (code, name_es, name_en, unit, technique, applies, cumulative) in enumerate(
-            OPERATING_PARAMETERS
-        ):
-            OperatingParameter.objects.create(
-                company=company, code=code, name=name_es, unit_code=unit,
-                technique_code=technique, applies_to=applies, is_cumulative=cumulative,
-                order=order, translations={"name": {"es": name_es, "en": name_en}},
-            )
 
     def _instruments(self, company) -> dict[str, Instrument]:
         rows = [
@@ -473,24 +224,6 @@ class Command(BaseCommand):
         }
 
     # ------------------------------------------------------------------- assets
-
-    def _group_kinds(self, company) -> dict:
-        """The train taxonomy and the point layout each one measures, from the
-        factory blueprints the repair migration also restores."""
-        created = {}
-        for blueprint in BUILTIN_KINDS:
-            kind = AssetGroupKind.objects.create(
-                company=company, code=blueprint.code, name=blueprint.name, is_builtin=True,
-                translations={"name": {"es": blueprint.name, "en": blueprint.name_en}},
-            )
-            # The layout helper defaults to `default`, the control plane.
-            write_layout(
-                kind, blueprint.components,
-                component_model=AssetGroupComponent, template_model=PointTemplate,
-                using=current_alias(),
-            )
-            created[blueprint.code] = kind
-        return created
 
     def _ensure_plan_room(self, company, adding: int) -> None:
         """Checked before writing anything: a load the plan cannot hold creates
@@ -817,16 +550,7 @@ class Command(BaseCommand):
         service a customer reads first. Leaving them out of the demo made the
         execution screen look like a list of numbers with no findings.
         """
-        faults = {
-            definition.code: FaultMode.objects.create(
-                company=company, code=definition.code, name=definition.name_es,
-                technique_code=definition.technique,
-                typical_signature=definition.signature,
-                iso_reference=definition.reference,
-                translations={"name": {"es": definition.name_es, "en": definition.name_en}},
-            )
-            for definition in ALL_FAULTS
-        }
+        faults = {fault.code: fault for fault in FaultMode.objects.filter(company=company)}
         analyst = users["CT"]
         entries = []
         for item in equipment:
@@ -863,27 +587,6 @@ class Command(BaseCommand):
                 if entry.service_visit_id:
                     entry.service_visit.fault_modes.set(matched)
 
-
-OPERATING_PARAMETERS = [
-    # code, es, en, unit, technique ("" = any), applies_to, cumulative
-    ("rpm", "Velocidad", "Speed", "rpm", "", [], False),
-    ("freq_hz", "Frecuencia", "Frequency", "Hz", "", [], False),
-    ("current_a", "Amperaje", "Current", "A", "", ["motor"], False),
-    ("voltage_v", "Voltaje", "Voltage", "V", "", ["motor"], False),
-    ("power_kw", "Potencia", "Power", "kW", "", ["motor"], False),
-    ("power_factor", "Factor de potencia", "Power factor", "", "", ["motor"], False),
-    ("running_hours", "Horas acumuladas", "Running hours", "h", "", [], True),
-    ("suction_psi", "Presión de succión", "Suction pressure", "PSI", "", ["pump"], False),
-    ("discharge_psi", "Presión de descarga", "Discharge pressure", "PSI", "", ["pump"], False),
-    ("flushing_coupling_psi", "Presión flushing lado acople", "Flushing pressure, coupling end",
-     "PSI", "", ["pump"], False),
-    ("flushing_free_psi", "Presión flushing lado libre", "Flushing pressure, free end",
-     "PSI", "", ["pump"], False),
-    ("ambient_temp", "Temperatura ambiente", "Ambient temperature", "°C", "thermography", [], False),
-    ("emissivity", "Emisividad", "Emissivity", "", "thermography", [], False),
-    ("load_pct", "Carga", "Load", "%", "thermography", [], False),
-    ("oil_hours", "Horas del lubricante", "Oil hours", "h", "oil_analysis", [], True),
-]
 
 FAULT_KEYWORDS = {
     "misalignment_parallel": ("desalinea", "desalinia", "dessalinea"),

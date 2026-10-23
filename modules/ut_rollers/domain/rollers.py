@@ -29,8 +29,8 @@ LABELS = {"operational": "Aceptable", "alarm": "Medio", "shutdown": "Crítico"}
 # the order calls MEDIO has its thinnest wall at 8.00 mm or below, every
 # ACEPTABLE one at 8.01 or above. The order has no CRÍTICO roller, so that cut
 # is an assumption to confirm with the client (Q15): 75 % of the 8.18 mm wall
-# of the 8" schedule-40 tube they are made of. Both are editable afterwards in
-# Configuración → Umbrales.
+# of the 8" schedule-40 tube they are made of. IPSA's criterion, not a default:
+# installing the module lays no cuts, and IPSA's are typed in Normas (Phase 6).
 MEDIUM_BELOW = Decimal("8.01")
 CRITICAL_BELOW = Decimal("6.14")
 
