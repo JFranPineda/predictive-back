@@ -17,6 +17,8 @@ MANIFEST = Manifest(
     menu=(
         MenuItem(label="Mediciones", route="/measurements", icon="activity", order=30,
                  permission="measurements.view_reading"),
+        MenuItem(label="Instrumentos", route="/settings/instruments", icon="thermometer", order=17,
+                 parent="settings", permission="measurements.view_reading"),
     ),
     events_published=("ReadingRecorded",),
 )

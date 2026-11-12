@@ -15,5 +15,7 @@ MANIFEST = Manifest(
     ),
     menu=(
         MenuItem(label="Diagnóstico", route="/diagnostics", icon="stethoscope", order=90, parent=None, permission='diagnostics.view'),
+        MenuItem(label="Modos de falla", route="/settings/fault-modes", icon="stethoscope", order=23,
+                 parent="settings", permission="diagnostics.view"),
     ),
 )

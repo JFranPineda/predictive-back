@@ -14,5 +14,7 @@ MANIFEST = Manifest(
     ),
     menu=(
         MenuItem(label="Datos operativos", route="/operating", icon="sliders", order=50, parent=None, permission='operating_data.view'),
+        MenuItem(label="Parámetros operativos", route="/settings/operating-parameters", icon="sliders", order=24,
+                 parent="settings", permission="operating_data.view"),
     ),
 )
